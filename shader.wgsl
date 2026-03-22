@@ -731,6 +731,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       
       if (rand_pcg() < F) {
         ray.direction = normalize(mix(specular, ctx.normal + random_unit_vector(), roughness));
+        throughput *= mix(vec3f(1.),ctx.albedo,roughness);
       } else {
         ray.direction = diffuse;
         throughput *= ctx.albedo;
