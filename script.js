@@ -16,6 +16,47 @@ class Texture {
   }
 }
 
+class HDRTexture {
+  constructor(url) {
+    this.url = url;
+    this.width = 1;
+    this.height = 1;
+    this.data = new Float16Array([0.02,0.03,0.05,1.0]); // Float16Array
+    if (typeof url == 'string') this.loaded = this._load(url);
+    else this.data = new Float16Array(url);
+  }
+
+  async _load(url) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      
+      const arrayBuffer = await response.arrayBuffer();
+      // parse-hdr expects a Uint8Array
+      const hdr = parseHdr(new Uint8Array(arrayBuffer));
+      
+      this.width = hdr.shape[0];
+      this.height = hdr.shape[1];
+      
+      // Convert RGB (3 floats) to RGBA (4 floats) for WebGPU compatibility
+      this.data = new Float16Array(this.width * this.height * 4);
+      for (let i = 0; i < this.width * this.height; i++) {
+        this.data[i * 4 + 0] = hdr.data[i * 4 + 0];
+        this.data[i * 4 + 1] = hdr.data[i * 4 + 1];
+        this.data[i * 4 + 2] = hdr.data[i * 4 + 2];
+        this.data[i * 4 + 3] = 1.0; // Alpha channel
+      }
+      return this;
+    } catch (err) {
+      console.error("Failed to load HDR:", url, err);
+      // Return a 1x1 black fallback so the engine doesn't crash
+      this.width = 1; this.height = 1;
+      this.data = new Float16Array([0.01, 0, 0, 1]);
+      return this;
+    }
+  }
+}
+
 class Material {
   constructor(type, color, roughness, emittance, options = {}) {
     this.type = type;
@@ -383,7 +424,7 @@ class Scene {
     this.objects = [];
     this.camera = new Camera(canvas);
     this.bounces = 8;
-    this.background = new Material(0,[0.02, 0.03, 0.05], 1.0, [0, 0, 0]);
+    this.background = null;
   }
   newSphere() { var o = new Sphere(...arguments); this.objects.push(o); return o; }
   newPlane() { var o = new Plane(...arguments); this.objects.push(o); return o; }
@@ -391,7 +432,7 @@ class Scene {
   newModel() { var o = new Model(...arguments); this.objects.push(o); return o; }
   
   getMaterials() {
-    var list = [this.background, ...this.objects];
+    var list = this.objects;
     var mats = [];
     for (var i = 0; i < list.length; i++) {
       var m = list[i].material || list[i];
@@ -404,7 +445,7 @@ class Scene {
     var mats = this.getMaterials();
     var texs = [];
     for (var i = 0; i < mats.length; i++) {
-      [mats[i].albedoTex, mats[i].normalTex, mats[i].heightTex].forEach(t => {
+      [mats[i].albedoTex, mats[i].normalTex, mats[i].heightTex, mats[i].roughnessTex].forEach(t => {
         if (t && !texs.includes(t)) texs.push(t);
       });
     }
@@ -415,7 +456,7 @@ class Scene {
 class Camera {
   constructor(canvas) {
     this.position = vec3.fromValues(0, 1.5, 4.5);
-    this.lookat = vec3.fromValues(0, 0.5, 0);
+    this.lookingat = vec3.fromValues(0, 0.5, 0);
     this.fov = 45; 
     this.aspect = canvas.width / canvas.height;
     this.ray00 = vec3.create(); this.ray10 = vec3.create();
@@ -423,7 +464,7 @@ class Camera {
     this.updateRays();
   }
   updateRays() {
-    const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.lookat, this.position));
+    const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.lookingat, this.position));
     const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
     const u = vec3.cross(vec3.create(), r, f);
     const h = Math.tan((this.fov * Math.PI / 180) / 2); 
@@ -435,14 +476,30 @@ class Camera {
     vec3.sub(this.ray01, f, hr); vec3.add(this.ray01, this.ray01, hu);
     vec3.add(this.ray11, f, hr); vec3.add(this.ray11, this.ray11, hu);
   }
+  lookAt(x,y,z) {
+    this.lookingat = vec3.fromValues(x,y,z);
+    this.updateRays();
+  }
+  setPosition(x,y,z) {
+    this.position = vec3.fromValues(x,y,z);
+    this.updateRays();
+  }
 }
 
+var SelectedScene = 0;
 var SceneList = [
   {
     name: "POM & Normals Box",
     load: async function() {},
     create: async function(canvas) {
+      canvas.width = 1024;
+      canvas.height = 768;
+
       var scene = new Scene(canvas);
+
+      var cam = scene.camera;
+      //cam.lookAt(0,0.5,0);
+      //cam.setPosition(0,0,4.5);
       
       // Preload our new textures
       var woodTex = new Texture('https://i.ibb.co/0RnQ8mp0/wood.png');
@@ -453,13 +510,20 @@ var SceneList = [
       var bunnyColor = new Texture('assets/bunny/color.jpg');
       var bunnyNormal = new Texture('assets/bunny/normal.png');
 
+      //scene.background = new HDRTexture([0.8,0.85,1,1]);
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/studio_small_09_2k.hdr');
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/venice_sunset_2k.hdr');
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/abandoned_greenhouse_2k.hdr');
+      //scene.background = new HDRTexture('assets/cape_hill_4k.hdr');
+
       await Promise.all([
         woodTex.loaded, 
         normalTex.loaded, 
         dispTex.loaded, 
         bunnyModel.loaded,
         bunnyColor.loaded,
-        bunnyNormal.loaded
+        bunnyNormal.loaded,
+        //scene.background.loaded
       ]);
       bunnyModel.renormalize();
       //rook.calculateVertexNormals();
@@ -467,12 +531,12 @@ var SceneList = [
       bunnyModel.generateBVH();
       //console.log(rook)
 
-      var matWhite  = new Material(0,[0.8, 0.8, 0.8], 1.0, [0, 0, 0]);
-      var matRed    = new Material(0,[0.8, 0.2, 0.2], 1.0, [0, 0, 0]);
-      var matGreen  = new Material(0,[0.2, 0.8, 0.2], 1.0, [0, 0, 0]);
+      var matWhite = new Material(0,[0.8, 0.8, 0.8], 1.0, [0, 0, 0]);
+      var matRed = new Material(0,[0.8, 0.2, 0.2], 1.0, [0, 0, 0]);
+      var matGreen = new Material(0,[0.2, 0.8, 0.2], 1.0, [0, 0, 0]);
       var matCeramic = new Material(0,[0.9, 0.9, 0.9], 0.0, [0, 0, 0]);
       var matMetal = new Material(1,[0.8, 0.9, 0.8], 0.0, [0, 0, 0]);
-      var matLight  = new Material(0,[0.0, 0.0, 0.0], 1.0, [15, 15, 15]);
+      var matLight = new Material(0,[0.0, 0.0, 0.0], 1.0, [15, 15, 15]);
       
       // Set up the robust POM material!
       var toyBox = new Material(0,[1.0, 1.0, 1.0], 0.5, [0, 0, 0], {
@@ -486,26 +550,28 @@ var SceneList = [
         heightOffset: 0    // Shifts where the surface starts
       });
 
-      var matGlass = new Material(2,[0.2, 0.2, 1.0], 1.0, [0, 0, 0]);
+      var matGlass = new Material(2,[1.0, 1.0, 1.0], 0.0, [0, 0, 0]);
+      var matBlueGlass = new Material(2,[0.2, 0.2, 1.0], 1.0, [0, 0, 0]);
       var matRedGlass = new Material(2,[1.0, 0.2, 0.2], 0.0, [0, 0, 0]);
       var matUraniumGlass = new Material(2,[0.4, 1.0, 0.4], 0.0, [0, 0.01, 0]);
 
       scene.newPlane(matCeramic, 0, 1, 0, 0);    // Floor (POM Textured)
-      scene.newPlane(matMetal, 0, -1, 0, -3.5);   // Ceiling
+      scene.newPlane(matWhite, 0, -1, 0, -3.5);   // Ceiling
       scene.newPlane(matMetal, 0, 0, 1, -3.0);    // Back wall
-      scene.newPlane(matWhite, 0, 0, -1, -10.0);    // Front wall
+      scene.newPlane(matMetal, 0, 0, -1, -10.0);    // Front wall
       scene.newPlane(matRed, 1, 0, 0, -2.5);      // Left wall
       scene.newPlane(matGreen, -1, 0, 0, -2.5);   // Right wall
       
       scene.newSphere(matLight, 0, 3.5, 0, 0.5);
-      //scene.newSphere(matGlass, -1.6, 0.5, -1.4, 0.5);
+      //scene.newSphere(matBlueGlass, -1.6, 0.5, -1.4, 0.5);
+      //scene.newSphere(matGlass, 0, 0, 0, 2);
 
       var bunnyMaterial = new Material(0,[1.0, 1.0, 1.0], 0.5, [0, 0, 0], {
         albedoTex: bunnyColor,
         normalTex: bunnyNormal,
         uvScale: [1.0, -1.0],
       });
-      var model = scene.newModel(matGlass,bunnyModel);
+      var model = scene.newModel(matBlueGlass,bunnyModel);
       model.translate(0,1,0);
 
       var model2 = scene.newModel(matRedGlass,bunnyModel);
@@ -516,9 +582,7 @@ var SceneList = [
       //quat.setAxisAngle(box.rotation, [0, 1, 0], -20 * Math.PI / 180); 
       //box.updateMatrix();
 
-      scene.bounces = 8;
-      canvas.width = 800;
-      canvas.height = 608;
+      scene.bounces = 24;
 
       return scene;
     }
@@ -581,6 +645,39 @@ class Renderer {
     const sampler = device.createSampler({
       magFilter: 'linear', minFilter: 'linear',
       addressModeU: 'repeat', addressModeV: 'repeat' // Required for POM tiling
+    });
+
+    // --- NEW: PREPARE HDRI SKYBOX ---
+    let hdrTextureView;
+    const skybox = scene.background; // Assuming you have this in your scene object
+    const hasSkybox = skybox instanceof HDRTexture;
+    if (hasSkybox) {
+      const skyTex = device.createTexture({ 
+        size: [ skybox.width, skybox.height ],
+        format: 'rgba16float', 
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+      });
+
+      device.queue.writeTexture(
+        { texture: skyTex },
+        skybox.data,
+        { bytesPerRow: skybox.width * 8 },
+        [ skybox.width, skybox.height ]
+      );
+
+      hdrTextureView = skyTex.createView();
+    } else {
+      // Fallback to a dark blue dummy sky if no URL provided
+      const dummySky = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      device.queue.writeTexture({ texture: dummySky }, new Float16Array([0.02, 0.03, 0.05, 1.0]), { bytesPerRow: 8 }, [1, 1]);
+      hdrTextureView = dummySky.createView();
+      // const dummyTex = device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      // device.queue.writeTexture({ texture: dummyTex }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+      // hdrTextureView = dummyTex.createView();
+    }
+    const skySampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
     });
 
     // --- 1. EXTRACT & PACK MATERIALS ---
@@ -771,7 +868,8 @@ class Renderer {
           2: hasPlanes ? 1 : 0, 
           3: hasCubes ? 1 : 0, 
           4: hasMeshes ? 1 : 0, 
-          5: hasHeightMaps ? 1 : 0 
+          5: hasHeightMaps ? 1 : 0,
+          6: hasSkybox ? 1 : 0,
         }
       } 
     });
@@ -805,7 +903,10 @@ class Renderer {
         { binding: 15, resource: gpuTextures[5].createView() },
         { binding: 16, resource: gpuTextures[6].createView() },
         { binding: 17, resource: gpuTextures[7].createView() },
-        { binding: 18, resource: sampler }
+        { binding: 18, resource: sampler },
+        //
+        { binding: 19, resource: hdrTextureView },
+        { binding: 20, resource: skySampler }
       ]
     });
 
@@ -844,10 +945,9 @@ class Renderer {
 var renderer;
 async function init() {
   const canvas = document.getElementById("gpuCanvas");
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  //canvas.width = window.innerWidth;
+  //canvas.height = window.innerHeight;
 
-  var SelectedScene = 0;
   await SceneList[SelectedScene].load();
   
   renderer = new Renderer(canvas);
