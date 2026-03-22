@@ -1,8 +1,9 @@
-@id(0) override HAS_SPHERES: bool = true;
-@id(1) override HAS_PLANES: bool = true;
-@id(2) override HAS_CUBES: bool = true;
-@id(3) override HAS_MESHES: bool = true;
-@id(4) override HAS_HEIGHTMAPS: bool = true;
+@id(0) override BOUNCE_LIMIT: i32 = 8;
+@id(1) override HAS_SPHERES: bool = true;
+@id(2) override HAS_PLANES: bool = true;
+@id(3) override HAS_CUBES: bool = true;
+@id(4) override HAS_MESHES: bool = true;
+@id(5) override HAS_HEIGHTMAPS: bool = true;
 
 struct Ray { 
   origin: vec3f,
@@ -568,7 +569,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   var beers_dist = 0.;
 
-  for (var bounce = 0; bounce < 20; bounce++) {
+  for (var bounce = 0; bounce < BOUNCE_LIMIT; bounce++) {
     var hit = trace_scene(ray);
         
     if (hit.m_idx == -1) {
@@ -640,7 +641,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let cosi = dot(ray.direction, ctx.normal);
       let entering = cosi < 0.0;
       var normal = ctx.normal;
-      if (entering) { normal *= -1; }
+      if (!entering) { normal *= -1; }
       
       // 1. If we hit the surface from the INSIDE, we are exiting.
       // Apply Beer's Law to the throughput based on the distance traveled (hit.t)
@@ -669,22 +670,22 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let refracted_dir = refraction(ray.direction, ctx.normal, mat.ior, 1.0);
         
         // Apply roughness to the transmission
-        //ray.direction = normalize(mix(refracted_dir, -ctx.normal + random_unit_vector(), roughness));
-        ray.direction = refracted_dir;
+        ray.direction = normalize(mix(refracted_dir, -normal + random_unit_vector(), roughness));
+        //ray.direction = refracted_dir;
 
         // Nudge: If entering, nudge INTO the mesh. If exiting, nudge OUT of the mesh.
         // Since ctx.normal always faces the ray, -ctx.normal always pushes "forward"
-        ray.origin = hit_pos + normal * 0.01;
+        ray.origin = hit_pos - normal * 0.01;
         
         // Note: We don't multiply by albedo here because Beer's Law handled it on exit!
         // If you want "surface tint" in addition to volumetric, you can multiply here too.
       } else {
         // --- REFLECT ---
-        let specular = reflect(ray.direction, ctx.normal);
-        ray.direction = normalize(mix(specular, ctx.normal + random_unit_vector(), roughness));
+        let specular = reflect(ray.direction, normal);
+        ray.direction = normalize(mix(specular, normal + random_unit_vector(), roughness));
         
         // Nudge OUTSIDE
-        ray.origin = hit_pos + ctx.normal * 0.001;
+        ray.origin = hit_pos + normal * 0.001;
         
         // Reflection on glass is usually uncolored (white), so no albedo multiplication
       }
