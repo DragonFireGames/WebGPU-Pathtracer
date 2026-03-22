@@ -4,6 +4,7 @@
 @id(3) override HAS_CUBES: bool = true;
 @id(4) override HAS_MESHES: bool = true;
 @id(5) override HAS_HEIGHTMAPS: bool = true;
+@id(6) override HAS_SKYBOX: bool = true;
 
 struct Ray { 
   origin: vec3f,
@@ -97,6 +98,10 @@ struct SurfaceHit {
 @group(0) @binding(17) var t7: texture_2d<f32>;
 @group(0) @binding(18) var texture_sampler: sampler;
 
+// skybox
+@group(0) @binding(19) var skyTex: texture_2d<f32>;
+@group(0) @binding(20) var skySampler: sampler;
+
 var<private> rng_state: u32;
 fn rand_pcg() -> f32 {
   let state = rng_state;
@@ -123,6 +128,23 @@ fn sample_texture(idx: i32, uv: vec2f) -> vec4f {
   else if (idx == 6) { return textureSampleLevel(t6, texture_sampler, uv, 0.0); }
   else if (idx == 7) { return textureSampleLevel(t7, texture_sampler, uv, 0.0); }
   return vec4f(1.0);
+}
+
+// WGSL function to sample the sky
+fn sample_sky(dir: vec3f) -> vec3f {
+  let pi = 3.14159265359;
+  
+  // Convert direction to spherical coordinates
+  let phi = atan2(dir.z, dir.x);      // -PI to PI
+  let theta = asin(clamp(dir.y, -1.0, 1.0)); // -PI/2 to PI/2
+  
+  // Map to 0.0 - 1.0 range
+  let u = 0.5 + phi / (2.0 * pi);
+  let v = 0.5 - theta / pi;
+  
+  // Sample your texture (assuming it's in a binding called 'skyTex')
+  // We use a sampler with linear filtering for smooth skies
+  return textureSampleLevel(skyTex, skySampler, vec2f(u, v), 0.0).rgb;
 }
 
 fn intersect_aabb(origin: vec3f, inv_dir: vec3f, aabb_min: vec3f, aabb_max: vec3f) -> f32 {
@@ -573,7 +595,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var hit = trace_scene(ray);
         
     if (hit.m_idx == -1) {
-      radiance += throughput * vec3f(0.02, 0.03, 2.05);
+      if (HAS_SKYBOX) { radiance += throughput * sample_sky(ray.direction); }
+      else { radiance += throughput * vec3f(0.02, 0.03, 2.05); }
       break;
     }
 
