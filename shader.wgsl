@@ -1,10 +1,12 @@
 @id(0) override BOUNCE_LIMIT: i32 = 8;
 @id(1) override HAS_SPHERES: bool = true;
-@id(2) override HAS_PLANES: bool = true;
-@id(3) override HAS_CUBES: bool = true;
-@id(4) override HAS_MESHES: bool = true;
-@id(5) override HAS_HEIGHTMAPS: bool = true;
-@id(6) override HAS_SKYBOX: bool = true;
+@id(2) override HAS_CUBES: bool = true;
+@id(3) override HAS_PLANES: bool = true;
+@id(4) override HAS_FRUSTUMS: bool = true;
+@id(5) override HAS_TORI: bool = true;
+@id(6) override HAS_MESHES: bool = true;
+@id(7) override HAS_HEIGHTMAPS: bool = true;
+@id(8) override HAS_SKYBOX: bool = true;
 
 struct Ray { 
   origin: vec3f,
@@ -39,9 +41,24 @@ struct TransformedObject {
 };
 
 struct Plane { 
-  normal_distance: vec4f, 
+  normal: vec3f,
+  d: f32,
   material_idx: i32,
   pad0: f32, pad1: f32, pad2: f32
+};
+
+struct Frustum { 
+  inv_matrix: mat4x4f,
+  material_idx: i32,
+  top_radius: f32,
+  pad0: f32, pad1: f32
+};
+
+struct Torus { 
+  inv_matrix: mat4x4f,
+  material_idx: i32,
+  inner_radius: f32,
+  pad0: f32, pad1: f32
 };
 
 struct Triangle {
@@ -72,7 +89,8 @@ struct BVHNode {
 struct SurfaceHit {
   t: f32, m_idx: i32,
   hit_p: vec3f, hit_n: vec3f, hit_uv: vec2f,
-  tangent: vec3f, bitangent: vec3f
+  tangent: vec3f, bitangent: vec3f,
+  //count: i32,
 };
 
 @group(0) @binding(0) var<uniform> params: SceneParams;
@@ -84,23 +102,25 @@ struct SurfaceHit {
 @group(0) @binding(6) var<storage, read> triangles: array<Triangle>;
 
 @group(0) @binding(7) var<storage, read> spheres: array<TransformedObject>;
-@group(0) @binding(8) var<storage, read> planes: array<Plane>;
-@group(0) @binding(9) var<storage, read> cubes: array<TransformedObject>;
+@group(0) @binding(8) var<storage, read> cubes: array<TransformedObject>;
+@group(0) @binding(9) var<storage, read> planes: array<Plane>;
+@group(0) @binding(10) var<storage, read> frustums: array<Frustum>;
+@group(0) @binding(11) var<storage, read> tori: array<Torus>;
 
 // 8 Texture Bindings for rich materials
-@group(0) @binding(10) var t0: texture_2d<f32>;
-@group(0) @binding(11) var t1: texture_2d<f32>;
-@group(0) @binding(12) var t2: texture_2d<f32>;
-@group(0) @binding(13) var t3: texture_2d<f32>;
-@group(0) @binding(14) var t4: texture_2d<f32>;
-@group(0) @binding(15) var t5: texture_2d<f32>;
-@group(0) @binding(16) var t6: texture_2d<f32>;
-@group(0) @binding(17) var t7: texture_2d<f32>;
-@group(0) @binding(18) var texture_sampler: sampler;
+@group(0) @binding(12) var t0: texture_2d<f32>;
+@group(0) @binding(13) var t1: texture_2d<f32>;
+@group(0) @binding(14) var t2: texture_2d<f32>;
+@group(0) @binding(15) var t3: texture_2d<f32>;
+@group(0) @binding(16) var t4: texture_2d<f32>;
+@group(0) @binding(17) var t5: texture_2d<f32>;
+@group(0) @binding(18) var t6: texture_2d<f32>;
+@group(0) @binding(19) var t7: texture_2d<f32>;
+@group(0) @binding(20) var texture_sampler: sampler;
 
 // skybox
-@group(0) @binding(19) var skyTex: texture_2d<f32>;
-@group(0) @binding(20) var skySampler: sampler;
+@group(0) @binding(21) var skyTex: texture_2d<f32>;
+@group(0) @binding(22) var skySampler: sampler;
 
 var<private> rng_state: u32;
 fn rand_pcg() -> f32 {
@@ -154,7 +174,7 @@ fn intersect_aabb(origin: vec3f, inv_dir: vec3f, aabb_min: vec3f, aabb_max: vec3
   let tmax = max(t0, t1);
   let t_near = max(max(tmin.x, tmin.y), tmin.z);
   let t_far = min(min(tmax.x, tmax.y), tmax.z);
-  if (t_near > t_far || t_far < 0.0) { return 9999999.0; }
+  if (t_near > t_far || t_far < 0.0) { return -1.; }//{ return 9999999.0; }
   return select(t_near, 0.0, t_near < 0.0);
 }
 
@@ -193,14 +213,17 @@ fn trace_mesh(ray_world: Ray, mesh: MeshInstance, hit: ptr<function, SurfaceHit>
   
   stack[0] = mesh.node_offset; // Start at root node for this mesh
   stack_ptr++;
+  let base_t = intersect_aabb(ray_local.origin, inv_dir, bvh_nodes[mesh.node_offset].aabb_min, bvh_nodes[mesh.node_offset].aabb_max);
+  if (base_t < 0.) {return;}
 
   while (stack_ptr > 0) {
+    //(*hit).count++;
     stack_ptr--;
     let node_idx = stack[stack_ptr];
     let node = bvh_nodes[node_idx];
 
-    let t_aabb = intersect_aabb(ray_local.origin, inv_dir, node.aabb_min, node.aabb_max);
-    if (t_aabb >= (*hit).t) { continue; }
+    //let t_aabb = intersect_aabb(ray_local.origin, inv_dir, node.aabb_min, node.aabb_max);
+    //if (t_aabb < 0. || t_aabb >= (*hit).t) { continue; }
 
     if (node.num_triangles > 0u) {
       // Leaf
@@ -235,8 +258,15 @@ fn trace_mesh(ray_world: Ray, mesh: MeshInstance, hit: ptr<function, SurfaceHit>
       // Inner Node
       let left_idx = node_idx + 1u;
       let right_idx = mesh.node_offset + node.next;
-      stack[stack_ptr] = right_idx; stack_ptr++;
-      stack[stack_ptr] = left_idx; stack_ptr++;
+      let left_t = intersect_aabb(ray_local.origin, inv_dir, bvh_nodes[left_idx].aabb_min, bvh_nodes[left_idx].aabb_max);
+      let right_t = intersect_aabb(ray_local.origin, inv_dir, bvh_nodes[right_idx].aabb_min, bvh_nodes[right_idx].aabb_max);
+      if (left_t < right_t) {
+        if (right_t >= 0. && right_t < (*hit).t) { stack[stack_ptr] = right_idx; stack_ptr++; }
+        if (left_t >= 0. && left_t < (*hit).t) { stack[stack_ptr] = left_idx; stack_ptr++; }
+      } else {
+        if (left_t >= 0. && left_t < (*hit).t) { stack[stack_ptr] = left_idx; stack_ptr++; }
+        if (right_t >= 0. && right_t < (*hit).t) { stack[stack_ptr] = right_idx; stack_ptr++; }
+      }
     }
   }
 }
@@ -272,6 +302,343 @@ fn hit_plane(normal: vec3f, d: f32, r: Ray) -> f32 {
     if (t > 0.001) { return t; }
   }
   return -1.0;
+}
+
+fn hit_frustum(r: Ray, r0: f32, r1: f32, t_out: ptr<function, f32>, n_out: ptr<function, vec3f>, uv_out: ptr<function, vec2f>) -> bool {
+  let h = 1.0;
+  let dr = r1 - r0;
+  
+  // Quadratic coefficients for a cone/frustum side
+  let k = dr / h;
+  let origin_eff_radius = r0 + k * r.origin.y;
+  
+  let A = r.direction.x * r.direction.x + r.direction.z * r.direction.z - k * k * r.direction.y * r.direction.y;
+  let B = 2.0 * (r.origin.x * r.direction.x + r.origin.z * r.direction.z - origin_eff_radius * k * r.direction.y);
+  let C = r.origin.x * r.origin.x + r.origin.z * r.origin.z - origin_eff_radius * origin_eff_radius;
+
+  var t_min = 1e10;
+  var hit = false;
+
+  // 1. Check side intersection
+  let disc = B * B - 4.0 * A * C;
+  if (disc > 0.0) {
+    let sqrt_d = sqrt(disc);
+    let t0 = (-B - sqrt_d) / (2.0 * A);
+    let t1 = (-B + sqrt_d) / (2.0 * A);
+    
+    for (var i = 0; i < 2; i++) {
+      let t = array<f32, 2>(t0, t1)[i];
+      let y = r.origin.y + t * r.direction.y;
+      if (t > 0.001 && t < t_min && y >= 0.0 && y <= h) {
+        t_min = t;
+        let p = r.origin + t * r.direction;
+        // Normal is slanted based on the cone angle
+        let slant = -k * (r0 + k * y);
+        *n_out = normalize(vec3f(p.x, slant, p.z));
+        *uv_out = vec2f(atan2(p.z, p.x) / (2.0 * 3.14159) + 0.5, y);
+        hit = true;
+      }
+    }
+  }
+
+  // 2. Check Caps (Top at y=1, Bottom at y=0)
+  let caps = array<f32, 2>(0.0, 1.0);
+  let radii = array<f32, 2>(r0, r1);
+  for (var i = 0; i < 2; i++) {
+    let py = caps[i];
+    let t = (py - r.origin.y) / r.direction.y;
+    if (t > 0.001 && t < t_min) {
+      let p = r.origin + t * r.direction;
+      if (p.x * p.x + p.z * p.z <= radii[i] * radii[i]) {
+        t_min = t;
+        *n_out = vec3f(0.0, f32(i) * 2.0 - 1.0, 0.0);
+        *uv_out = (p.xz / (max(r0, r1) * 2.0)) + 0.5;
+        hit = true;
+      }
+    }
+  }
+
+  if (hit) { *t_out = t_min; }
+  return hit;
+}
+
+fn hit_torus(r: Ray, Ra: f32, ra: f32) -> f32 {
+  var po = 1.0;
+  
+  let Ra2 = Ra * Ra;
+  let ra2 = ra * ra;
+  
+  let m = dot(r.origin, r.origin);
+  let n = dot(r.origin, r.direction);
+
+  // 1. Bounding sphere early exit
+  let bounds_radius = Ra + ra;
+  let h_bound = n * n - m + bounds_radius * bounds_radius;
+  if (h_bound < 0.0) { return -1.0; }
+  
+  // 2. Compute Quartic Coefficients
+  // We use r.origin.y and r.direction.y because your shader treats Y as UP
+  let k = (m - ra2 - Ra2) / 2.0;
+  let k3 = n;
+  let k2 = n * n + Ra2 * r.direction.y * r.direction.y + k;
+  let k1 = k * n + Ra2 * r.origin.y * r.direction.y;
+  let k0 = k * k + Ra2 * r.origin.y * r.origin.y - Ra2 * ra2;
+  
+  // Numerical stability: handle cases where k1 is near zero by reciprocal transformation
+  var K3 = k3; var K2 = k2; var K1 = k1; var K0 = k0;
+  if (abs(k3 * (k3 * k3 - k2) + k1) < 0.01) {
+    po = -1.0;
+    let inv_k0 = 1.0 / k0;
+    K1 = k3 * inv_k0;
+    K2 = k2 * inv_k0;
+    K3 = k1 * inv_k0;
+    K0 = inv_k0;
+  }
+
+  let c2 = (2.0 * K2 - 3.0 * K3 * K3) / 3.0;
+  let c1 = 2.0 * (K3 * (K3 * K3 - K2) + K1);
+  let c0 = (K3 * (K3 * (-3.0 * K3 * K3 + 4.0 * K2) - 8.0 * K1) + 4.0 * K0) / 3.0;
+  
+  let Q = c2 * c2 + c0;
+  let R = 3.0 * c0 * c2 - c2 * c2 * c2 - c1 * c1;
+  
+  let h = R * R - Q * Q * Q;
+  var z = 0.0;
+  
+  if (h < 0.0) {
+    // 4 real intersections
+    let sQ = sqrt(Q);
+    z = 2.0 * sQ * cos(acos(clamp(R / (sQ * Q), -1.0, 1.0)) / 3.0);
+  } else {
+    // 2 real intersections
+    let sQ = pow(sqrt(h) + abs(R), 1.0/3.0);
+    z = sign(R) * abs(sQ + Q / sQ);
+  }     
+  z = c2 - z;
+  
+  var d1 = z - 3.0 * c2;
+  var d2 = z * z - 3.0 * c0;
+  
+  if (abs(d1) < 1.0e-4) {
+    if (d2 < 0.0) { return -1.0; }
+    d2 = sqrt(d2);
+  } else {
+    if (d1 < 0.0) { return -1.0; }
+    d1 = sqrt(d1 / 2.0);
+    d2 = c1 / d1;
+  }
+
+  // 3. Solve the two quadratics
+  var result = 1e20;
+
+  // First quadratic
+  var h1 = d1 * d1 - z + d2;
+  if (h1 > 0.0) {
+    h1 = sqrt(h1);
+    var t1 = -d1 - h1 - K3; if(po < 0.0){ t1 = 2.0/t1; }
+    var t2 = -d1 + h1 - K3; if(po < 0.0){ t2 = 2.0/t2; }
+    if (t1 > 0.001) { result = t1; }
+    if (t2 > 0.001) { result = min(result, t2); }
+  }
+
+  // Second quadratic
+  var h2 = d1 * d1 - z - d2;
+  if (h2 > 0.0) {
+    h2 = sqrt(h2);
+    var t3 = d1 - h2 - K3; if(po < 0.0){ t3 = 2.0/t3; }
+    var t4 = d1 + h2 - K3; if(po < 0.0){ t4 = 2.0/t4; }
+    if (t3 > 0.001) { result = min(result, t3); }
+    if (t4 > 0.001) { result = min(result, t4); }
+  }
+
+  return select(result, -1.0, result > 1e10);
+}
+
+fn trace_sphere(ray_world: Ray, s: TransformedObject, hit: ptr<function, SurfaceHit>) {
+  var local_ray: Ray;
+  local_ray.origin = (s.inv_matrix * vec4f(ray_world.origin, 1.0)).xyz;
+  local_ray.direction = (s.inv_matrix * vec4f(ray_world.direction, 0.0)).xyz;
+  
+  let t = hit_unit_sphere(local_ray);
+  if (t > 0.001 && t < (*hit).t) {
+    (*hit).t = t; 
+    (*hit).m_idx = s.material_idx;
+    
+    let local_normal = local_ray.origin + local_ray.direction * t;
+    
+    // UV Mapping
+    let phi = atan2(local_normal.z, local_normal.x);
+    let theta = asin(clamp(local_normal.y, -1.0, 1.0));
+    (*hit).hit_uv = vec2f(0.5 + phi / (2.0 * 3.14159265), 0.5 + theta / 3.14159265);
+    
+    // Tangent Basis
+    var local_t = vec3f(-local_normal.z, 0.0, local_normal.x);
+    if (abs(local_normal.y) > 0.999) { local_t = vec3f(1.0, 0.0, 0.0); }
+    local_t = normalize(local_t);
+    let local_b = cross(local_normal, local_t);
+    
+    // Transform to World Space
+    let n_mat = transpose(mat3x3f(s.inv_matrix[0].xyz, s.inv_matrix[1].xyz, s.inv_matrix[2].xyz));
+    (*hit).hit_n = normalize(n_mat * local_normal);
+    (*hit).tangent = normalize(n_mat * local_t);
+    (*hit).bitangent = normalize(n_mat * local_b);
+    (*hit).hit_p = ray_world.origin + ray_world.direction * t;
+  }
+}
+
+fn trace_cube(ray_world: Ray, c: TransformedObject, hit: ptr<function, SurfaceHit>) {
+  var local_ray: Ray;
+  local_ray.origin = (c.inv_matrix * vec4f(ray_world.origin, 1.0)).xyz;
+  local_ray.direction = (c.inv_matrix * vec4f(ray_world.direction, 0.0)).xyz;
+  
+  let t = hit_unit_cube(local_ray);
+  if (t > 0.001 && t < (*hit).t) {
+    (*hit).t = t; 
+    (*hit).m_idx = c.material_idx;
+    
+    let local_hit = local_ray.origin + local_ray.direction * t;
+    let d = abs(local_hit);
+    let max_d = max(max(d.x, d.y), d.z);
+
+    var local_n: vec3f; var local_t: vec3f; var local_b: vec3f;
+
+    if (max_d == d.x) { 
+      let s = sign(local_hit.x);
+      local_n = vec3f(s, 0.0, 0.0);
+      local_t = vec3f(0.0, 0.0, -s); 
+      local_b = vec3f(0.0, 1.0, 0.0);
+      (*hit).hit_uv = vec2f(-s * local_hit.z, local_hit.y) * 0.5 + 0.5;
+    } else if (max_d == d.y) { 
+      let s = sign(local_hit.y);
+      local_n = vec3f(0.0, s, 0.0);
+      local_t = vec3f(1.0, 0.0, 0.0); 
+      local_b = vec3f(0.0, 0.0, s);
+      (*hit).hit_uv = vec2f(local_hit.x, s * local_hit.z) * 0.5 + 0.5;
+    } else { 
+      let s = sign(local_hit.z);
+      local_n = vec3f(0.0, 0.0, s);
+      local_t = vec3f(s, 0.0, 0.0); 
+      local_b = vec3f(0.0, 1.0, 0.0);
+      (*hit).hit_uv = vec2f(s * local_hit.x, local_hit.y) * 0.5 + 0.5;
+    }
+
+    let n_mat = transpose(mat3x3f(c.inv_matrix[0].xyz, c.inv_matrix[1].xyz, c.inv_matrix[2].xyz));
+    (*hit).hit_n = normalize(n_mat * local_n);
+    (*hit).tangent = normalize(n_mat * local_t);
+    (*hit).bitangent = normalize(n_mat * local_b);
+    (*hit).hit_p = ray_world.origin + ray_world.direction * t;
+  }
+}
+
+fn trace_plane(ray_world: Ray, p: Plane, hit: ptr<function, SurfaceHit>) {
+  let t = hit_plane(p.normal, p.d, ray_world);
+  if (t > 0.001 && t < (*hit).t) {
+    (*hit).t = t; 
+    (*hit).m_idx = p.material_idx;
+    (*hit).hit_n = p.normal;
+    (*hit).hit_p = ray_world.origin + ray_world.direction * t;
+    
+    var tangent = vec3f(1.0, 0.0, 0.0);
+    if (abs((*hit).hit_n.x) > 0.9) { tangent = vec3f(0.0, 0.0, 1.0); }
+    (*hit).tangent = normalize(cross((*hit).hit_n, tangent));
+    (*hit).bitangent = normalize(cross((*hit).hit_n, (*hit).tangent));
+    (*hit).hit_uv = vec2f(dot((*hit).hit_p, (*hit).tangent), dot((*hit).hit_p, (*hit).bitangent));
+  }
+}
+
+fn trace_frustum(ray_world: Ray, f: Frustum, hit: ptr<function, SurfaceHit>) {
+  var local_ray: Ray;
+  local_ray.origin = (f.inv_matrix * vec4f(ray_world.origin, 1.0)).xyz;
+  local_ray.direction = (f.inv_matrix * vec4f(ray_world.direction, 0.0)).xyz;
+
+  var t: f32; var n: vec3f; var uv: vec2f;
+  if (hit_frustum(local_ray, 1.0, f.top_radius, &t, &n, &uv)) {
+    if (t < (*hit).t) {
+      (*hit).t = t;
+      (*hit).m_idx = f.material_idx;
+      (*hit).hit_uv = uv;
+      
+      let n_mat = transpose(mat3x3f(f.inv_matrix[0].xyz, f.inv_matrix[1].xyz, f.inv_matrix[2].xyz));
+      (*hit).hit_n = normalize(n_mat * n);
+      (*hit).hit_p = ray_world.origin + ray_world.direction * t;
+    }
+  }
+}
+
+fn trace_torus(ray: Ray, tor: Torus, hit: ptr<function, SurfaceHit>) {
+  var l_ray: Ray;
+  l_ray.origin = (tor.inv_matrix * vec4f(ray.origin, 1.0)).xyz;
+  l_ray.direction = (tor.inv_matrix * vec4f(ray.direction, 0.0)).xyz;
+  
+  let ray_scale = length(l_ray.direction);
+  l_ray.direction /= ray_scale; 
+
+  // Major radius is 1.0 in local space, inner_radius is tor.inner_radius
+  let t = hit_torus(l_ray, 1.0, tor.inner_radius * 1.);
+
+  if (t > 0.) {
+    let world_t = t / ray_scale;
+    if (world_t < (*hit).t) {
+      (*hit).t = world_t;
+      (*hit).m_idx = tor.material_idx;
+      
+      let p = l_ray.origin + l_ray.direction * t;
+
+      // 3. Normal logic: Point p minus the closest point on the center-ring
+      let ring_p = normalize(vec3f(p.x, 0.0, p.z)); 
+      let local_n = normalize(p - ring_p);
+      
+      let n_mat = mat3x3f(tor.inv_matrix[0].xyz, tor.inv_matrix[1].xyz, tor.inv_matrix[2].xyz);
+      (*hit).hit_n = normalize(n_mat * local_n);
+
+      // 4. UVs
+      let u = (atan2(p.z, p.x) / 6.283185) + 0.5;
+      let v = (atan2(p.y, length(p.xz) - 1.0) / 6.283185) + 0.5;
+      (*hit).hit_uv = vec2f(u, v);
+    }
+  }
+}
+
+fn trace_scene(ray: Ray) -> SurfaceHit {
+  var hit = SurfaceHit(1e10, -1, vec3f(0.0), vec3f(0.0), vec2f(0.0), vec3f(0.0), vec3f(0.0));
+  
+  if (HAS_SPHERES) {
+    for (var i = 0u; i < arrayLength(&spheres); i++) {
+      trace_sphere(ray, spheres[i], &hit);
+    }
+  }
+
+  if (HAS_CUBES) {
+    for (var i = 0u; i < arrayLength(&cubes); i++) {
+      trace_cube(ray, cubes[i], &hit);
+    }
+  }
+  
+  if (HAS_PLANES) {
+    for (var i = 0u; i < arrayLength(&planes); i++) {
+      trace_plane(ray, planes[i], &hit);
+    }
+  }
+
+  if (HAS_FRUSTUMS) {
+    for (var i = 0u; i < arrayLength(&frustums); i++) {
+      trace_frustum(ray, frustums[i], &hit);
+    }
+  }
+
+  if (HAS_TORI) {
+    for (var i = 0u; i < arrayLength(&tori); i++) {
+      trace_torus(ray, tori[i], &hit);
+    }
+  }
+
+  if (HAS_MESHES) {
+    for (var i = 0u; i < arrayLength(&meshes); i++) {
+      trace_mesh(ray, meshes[i], &hit);
+    }
+  }
+
+  return hit;
 }
 
 struct PomResult {
@@ -468,112 +835,6 @@ fn get_surface_context(hit: SurfaceHit, mat: Material, tbn: mat3x3f, uv: vec2f) 
   return ctx;
 }
 
-fn trace_scene(ray: Ray) -> SurfaceHit {
-  var hit = SurfaceHit(1e10, -1, vec3f(0.0), vec3f(0.0), vec2f(0.0), vec3f(0.0), vec3f(0.0));
-  
-  if (HAS_SPHERES) {
-    for (var i = 0u; i < arrayLength(&spheres); i++) {
-      let s = spheres[i];
-      var local_ray: Ray;
-      local_ray.origin = (s.inv_matrix * vec4f(ray.origin, 1.0)).xyz;
-      local_ray.direction = (s.inv_matrix * vec4f(ray.direction, 0.0)).xyz;
-      let t = hit_unit_sphere(local_ray);
-      if (t > 0.001 && t < hit.t) {
-        hit.t = t; hit.m_idx = s.material_idx;
-        let local_hit = local_ray.origin + local_ray.direction * t;
-        let local_normal = local_hit;
-        let phi = atan2(local_normal.z, local_normal.x);
-        let theta = asin(local_normal.y);
-        hit.hit_uv = vec2f(0.5 + phi / (2.0 * 3.14159265), 0.5 + theta / 3.14159265);
-        
-        var local_t = vec3f(-local_normal.z, 0.0, local_normal.x);
-        if (abs(local_normal.y) > 0.999) { local_t = vec3f(1.0, 0.0, 0.0); }
-        local_t = normalize(local_t);
-        let local_b = cross(local_normal, local_t);
-        
-        let n_mat = transpose(mat3x3f(s.inv_matrix[0].xyz, s.inv_matrix[1].xyz, s.inv_matrix[2].xyz));
-        hit.hit_n = normalize(n_mat * local_normal);
-        hit.tangent = normalize(n_mat * local_t);
-        hit.bitangent = normalize(n_mat * local_b);
-        hit.hit_p = ray.origin + ray.direction * t;
-      }
-    }
-  }
-
-  if (HAS_CUBES) {
-    for (var i = 0u; i < arrayLength(&cubes); i++) {
-      let c = cubes[i];
-      var local_ray: Ray;
-      local_ray.origin = (c.inv_matrix * vec4f(ray.origin, 1.0)).xyz;
-      local_ray.direction = (c.inv_matrix * vec4f(ray.direction, 0.0)).xyz;
-      let t = hit_unit_cube(local_ray);
-      if (t > 0.001 && t < hit.t) {
-        hit.t = t; 
-        hit.m_idx = c.material_idx;
-        let local_hit = local_ray.origin + local_ray.direction * t;
-        let d = abs(local_hit);
-        let max_d = max(max(d.x, d.y), d.z);
-
-        var local_n: vec3f; var local_t: vec3f; var local_b: vec3f;
-
-        if (max_d == d.x) { 
-          let s = sign(local_hit.x);
-          local_n = vec3f(s, 0.0, 0.0);
-          local_t = vec3f(0.0, 0.0, -s); 
-          local_b = vec3f(0.0, 1.0, 0.0);
-          hit.hit_uv = vec2f(-s * local_hit.z, local_hit.y) * 0.5 + 0.5;
-        } else if (max_d == d.y) { 
-          let s = sign(local_hit.y);
-          local_n = vec3f(0.0, s, 0.0);
-          local_t = vec3f(1.0, 0.0, 0.0); 
-          local_b = vec3f(0.0, 0.0, s);
-          hit.hit_uv = vec2f(local_hit.x, s * local_hit.z) * 0.5 + 0.5;
-        } else { 
-          let s = sign(local_hit.z);
-          local_n = vec3f(0.0, 0.0, s);
-          local_t = vec3f(s, 0.0, 0.0); 
-          local_b = vec3f(0.0, 1.0, 0.0);
-          hit.hit_uv = vec2f(s * local_hit.x, local_hit.y) * 0.5 + 0.5;
-        }
-
-        // Crucial: Transform T, B, and N into World Space using the inverse transpose
-        let n_mat = transpose(mat3x3f(c.inv_matrix[0].xyz, c.inv_matrix[1].xyz, c.inv_matrix[2].xyz));
-        hit.hit_n = normalize(n_mat * local_n);
-        hit.tangent = normalize(n_mat * local_t);
-        hit.bitangent = normalize(n_mat * local_b);
-        hit.hit_p = ray.origin + ray.direction * t;
-      }
-    }
-  }
-  
-  if (HAS_PLANES) {
-    for (var i = 0u; i < arrayLength(&planes); i++) {
-      let p = planes[i];
-      let t = hit_plane(p.normal_distance.xyz, p.normal_distance.w, ray);
-      if (t > 0.001 && t < hit.t) {
-        hit.t = t; hit.m_idx = p.material_idx;
-        hit.hit_n = p.normal_distance.xyz;
-        let hit_p = ray.origin + ray.direction * t;
-        
-        var tangent = vec3f(1.0, 0.0, 0.0);
-        if (abs(hit.hit_n.x) > 0.9) { tangent = vec3f(0.0, 0.0, 1.0); }
-        hit.tangent = normalize(cross(hit.hit_n, tangent));
-        hit.bitangent = normalize(cross(hit.hit_n, hit.tangent));
-        hit.hit_uv = vec2f(dot(hit_p, hit.tangent), dot(hit_p, hit.bitangent));
-      }
-    }
-  }
-
-  if (HAS_MESHES) {
-    for (var i = 0u; i < arrayLength(&meshes); i++) {
-      trace_mesh(ray, meshes[i], &hit);
-    }
-  }
-
-  return hit;
-}
-  
-
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= params.width || id.y >= params.height) { return; }
@@ -585,6 +846,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let screen_uv = (vec2f(id.xy) + vec2f(rand_pcg(), rand_pcg())) / vec2f(f32(params.width), f32(params.height));
   let ray_dir = normalize(mix(mix(params.ray00.xyz, params.ray10.xyz, screen_uv.x), mix(params.ray01.xyz, params.ray11.xyz, screen_uv.x), 1.-screen_uv.y));
   var ray = Ray(params.eye.xyz, ray_dir);
+
+  //var hit = trace_scene(ray);
+  //textureStore(output_tex, id.xy, vec4f(vec3f(1.-log(log(hit.t)+1.)), 1.0));
+  //textureStore(output_tex, id.xy, vec4f(hit.hit_n, 1.0));
+  //hit.hit_uv = fract(hit.hit_uv); textureStore(output_tex, id.xy, vec4f(hit.hit_uv.x,hit.hit_uv.y,1. - hit.hit_uv.x * hit.hit_uv.y, 1.0));
+  //return;
   
   var throughput = vec3f(1.0);
   var radiance = vec3f(0.0);
@@ -593,7 +860,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   for (var bounce = 0; bounce < BOUNCE_LIMIT; bounce++) {
     var hit = trace_scene(ray);
-        
+    //throughput*=pow(0.9,f32(hit.count));
+    
     if (hit.m_idx == -1) {
       if (HAS_SKYBOX) { radiance += throughput * sample_sky(ray.direction); }
       else { radiance += throughput * vec3f(0.02, 0.03, 2.05); }
