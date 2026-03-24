@@ -5,8 +5,9 @@
 @id(4) override HAS_FRUSTUMS: bool = true;
 @id(5) override HAS_TORI: bool = true;
 @id(6) override HAS_MESHES: bool = true;
-@id(7) override HAS_HEIGHTMAPS: bool = true;
-@id(8) override HAS_SKYBOX: bool = true;
+@id(7) override HAS_LIST_MESHES: bool = true;
+@id(8) override HAS_HEIGHTMAPS: bool = true;
+@id(9) override HAS_SKYBOX: bool = true;
 
 struct Ray {
   origin: vec3f,
@@ -73,9 +74,9 @@ struct Triangle {
 struct MeshInstance {
   inv_matrix: mat4x4f,
   material_idx: i32,
+  pad: i32,
   node_offset: u32,
   tri_offset: u32,
-  pad: f32
 };
 
 struct BVHNode {
@@ -622,12 +623,17 @@ fn trace_tlas(ray: Ray, hit: ptr<function, SurfaceHit>) {
       for (var i = start; i < end; i++) {
         let obj = objects[i];
         let otype = obj.object_type;
-        if (HAS_SPHERES && otype == 1) { trace_sphere(ray, obj, hit); }
-        else if (HAS_CUBES && otype == 2) { trace_cube(ray, obj, hit); }
-        else if (HAS_FRUSTUMS && otype == 3) { 
+        if (HAS_MESHES && otype == 0) {
+          let mesh = MeshInstance(obj.inv_matrix,obj.material_idx,0,bitcast<u32>(obj.pad0),bitcast<u32>(obj.pad1));
+          trace_mesh(ray, mesh, hit);
+        } else if (HAS_SPHERES && otype == 1) { 
+          trace_sphere(ray, obj, hit);
+        } else if (HAS_CUBES && otype == 2) { 
+          trace_cube(ray, obj, hit);
+        } else if (HAS_FRUSTUMS && otype == 3) { 
           let frustum = Frustum(obj.inv_matrix,obj.material_idx,obj.pad0);
           trace_frustum(ray, frustum, hit);
-        } else if (HAS_TORI && otype == 4) { 
+        } else if (HAS_TORI && otype == 4) {
           let torus = Torus(obj.inv_matrix,obj.material_idx,obj.pad0);
           trace_torus(ray, torus, hit);
         }
@@ -658,11 +664,11 @@ fn trace_scene(ray: Ray) -> SurfaceHit {
     }
   }
 
-  if (HAS_SPHERES || HAS_CUBES || HAS_FRUSTUMS || HAS_TORI) {
+  if (HAS_SPHERES || HAS_CUBES || HAS_FRUSTUMS || HAS_TORI || HAS_MESHES) {
     trace_tlas(ray, &hit);
   }
 
-  if (HAS_MESHES) {
+  if (HAS_LIST_MESHES) {
     for (var i = 0u; i < arrayLength(&meshes); i++) {
       trace_mesh(ray, meshes[i], &hit);
     }
