@@ -7,9 +7,13 @@ class CameraController {
     this.target = [0, 1, 0]; this.orbit = { theta: 0.5, phi: 1.2, radius: 10 };
     this.position = vec3.create(); this.view = mat4.create(); this.proj = mat4.create();
     this.isPanning = false; this.isOrbiting = false;
+    this.fov = 45;
+    this.aperture = 0;
+    this.focusDist = 1;
+    this.exposure = 1;
   }
   update(aspect) {
-    mat4.perspective(this.proj, 0.75, aspect, 0.1, 1000);
+    mat4.perspective(this.proj, this.fov * Math.PI / 180, aspect, 0.1, 1000);
     this.position[0] = this.target[0] + this.orbit.radius * Math.sin(this.orbit.phi) * Math.cos(this.orbit.theta);
     this.position[1] = this.target[1] + this.orbit.radius * Math.cos(this.orbit.phi);
     this.position[2] = this.target[2] + this.orbit.radius * Math.sin(this.orbit.phi) * Math.sin(this.orbit.theta);
@@ -413,7 +417,7 @@ const fs = `#version 300 es
       vec3 diffuse = albedo * (diffuseInt + 0.05);
       finalColor = mix(diffuse, sampleSky(R), F * (1.0 - u_roughness));
       float spec = pow(max(0.0, dot(R, normalize(vec3(1.0, 1.0, 1.0)))), mix(64.0, 2.0, sqrt(u_roughness)));
-      finalColor += spec;
+      finalColor += mix(vec3(1), albedo, u_roughness) * spec;
     }
 
     finalColor += u_emittance;
@@ -481,8 +485,9 @@ function setMaterialUniforms(mat) {
   // 1. Texture Slots
   const bindTex = (loc, hasLoc, tex, unit) => {
     let active = false;
-    if (tex && tex.glTexture) {
+    if (tex) {
       gl.activeTexture(gl.TEXTURE0 + unit);
+      if (!tex.glTexture) window.uploadTextureToGPU(tex);
       gl.bindTexture(gl.TEXTURE_2D, tex.glTexture);
       gl.uniform1i(loc, unit);
       active = true;
@@ -1052,6 +1057,14 @@ const renderSceneInspector = () => {
 
   gui = new GUI({ container: root, autoPlace: false });
 
+
+  const c = Cam;
+  const ca = gui.addFolder('Camera');
+  ca.add(c,'fov',0,180).name("FOV");
+  ca.add(c,'aperture',0,1).name("Aperture");
+  ca.add(c,'focusDist').name("Focus Distance");
+  ca.add(c,'exposure').name("Exposure");
+
   const a = State;
   const bg = gui.addFolder('Background');
   bg.addColor(a,'backgroundColor').name("Color");
@@ -1061,7 +1074,6 @@ const renderSceneInspector = () => {
   a.removeBackground = ()=>{ a.background = null; bslot.textContent = "Drop HDR Texture Here"; }
   bgt.add(a, 'removeBackground').name('Remove Texture');
 }
-
 // Canvas Drop for Models & Materials
 gl_canvas.ondragover = e => e.preventDefault();
 gl_canvas.ondrop = e => {
@@ -1170,6 +1182,20 @@ document.getElementById('ctx-delete').onclick = () => {
   selectAsset(null);
   selectNode(null);
   ctxMenu.style.display='none';
+};
+document.getElementById('ctx-duplicate').onclick = () => { 
+  if (State.selected) {
+    var o = State.selected;
+    var c = new o.constructor(o.name,o.material);
+    for (var i in o) {
+      if (i != "id") c[i] = o[i];
+      if (c[i] instanceof Float32Array) c[i] = new Float32Array(c[i]);
+    }
+    o.vaoData = null;
+    State.scene.objects.push(c);
+    State.nodes.push(c);
+    selectNode(c.id);
+  }
 };
 window.onclick = () => ctxMenu.style.display='none';
 window.onkeydown = e => { 
@@ -1324,6 +1350,10 @@ async function startRender() {
 
   scene.camera.position = Cam.position;
   scene.camera.target = Cam.target;
+  scene.camera.fov = Cam.fov;
+  scene.camera.aperture = Cam.aperture;
+  scene.camera.focusDist = Cam.focusDist;
+  scene.camera.exposure = Cam.exposure;
   scene.camera.updateRays();
 
   await renderer.setScene(scene);

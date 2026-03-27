@@ -1395,23 +1395,77 @@ class Camera {
     this.position = vec3.fromValues(0, 1.5, 4.5);
     this.target = vec3.fromValues(0, 0.5, 0);
     this.fov = 45;
+    this.aperture = 0;
+    this.focusDist = 1;
+    this.exposure = 1;
     this.aspect = canvas.width / canvas.height;
     this.ray00 = vec3.create(); this.ray10 = vec3.create();
     this.ray01 = vec3.create(); this.ray11 = vec3.create();
     this.updateRays();
+    this.jitteredPosition = vec3.fromValues([0,0,0]);
   }
   updateRays() {
-    const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.target, this.position));
+    // const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.target, this.position));
+    // const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
+    // const u = vec3.cross(vec3.create(), r, f);
+    // const h = Math.tan((this.fov * Math.PI / 180) / 2); 
+    // const w = h * this.aspect;
+    // const hr = vec3.scale(vec3.create(), r, w); 
+    // const hu = vec3.scale(vec3.create(), u, h);
+    // vec3.sub(this.ray00, f, hr); vec3.sub(this.ray00, this.ray00, hu);
+    // vec3.add(this.ray10, f, hr); vec3.sub(this.ray10, this.ray10, hu);
+    // vec3.sub(this.ray01, f, hr); vec3.add(this.ray01, this.ray01, hu);
+    // vec3.add(this.ray11, f, hr); vec3.add(this.ray11, this.ray11, hu);
+  }
+  updateRays2() {
+    // 1. Setup Camera Basis
+    const lookDir = vec3.sub(vec3.create(), this.target, this.position);
+    const focusDist = vec3.length(lookDir) * this.focusDist;
+    const f = vec3.normalize(vec3.create(), lookDir);
     const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
     const u = vec3.cross(vec3.create(), r, f);
-    const h = Math.tan((this.fov * Math.PI / 180) / 2); 
+
+    // 2. Determine View Plane size at Focus Distance
+    // We calculate the plane dimensions specifically at the focusDist
+    const h = Math.tan((this.fov * Math.PI / 180) / 2) * focusDist;
     const w = h * this.aspect;
-    const hr = vec3.scale(vec3.create(), r, w); 
+
+    const hr = vec3.scale(vec3.create(), r, w);
     const hu = vec3.scale(vec3.create(), u, h);
-    vec3.sub(this.ray00, f, hr); vec3.sub(this.ray00, this.ray00, hu);
-    vec3.add(this.ray10, f, hr); vec3.sub(this.ray10, this.ray10, hu);
-    vec3.sub(this.ray01, f, hr); vec3.add(this.ray01, this.ray01, hu);
-    vec3.add(this.ray11, f, hr); vec3.add(this.ray11, this.ray11, hu);
+    const focusCenter = vec3.scaleAndAdd(vec3.create(), this.position, f, focusDist);
+
+    // 3. Define the 4 corners of the focus plane
+    const p00 = vec3.create();
+    const p10 = vec3.create();
+    const p01 = vec3.create();
+    const p11 = vec3.create();
+
+    vec3.sub(p00, focusCenter, hr); vec3.sub(p00, p00, hu);
+    vec3.add(p10, focusCenter, hr); vec3.sub(p10, p10, hu);
+    vec3.sub(p01, focusCenter, hr); vec3.add(p01, p01, hu);
+    vec3.add(p11, focusCenter, hr); vec3.add(p11, p11, hu);
+
+    // 4. Generate Lens Jitter (Unit Disk Sampling)
+    // We generate a random point inside a circle of radius 'aperture / 2'
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.sqrt(Math.random()) * (this.aperture * 0.5);
+    const offsetX = Math.cos(angle) * radius;
+    const offsetY = Math.sin(angle) * radius;
+
+    // Transform lens offset to world space basis (Right and Up vectors)
+    const lensOffset = vec3.create();
+    vec3.scaleAndAdd(lensOffset, lensOffset, r, offsetX);
+    vec3.scaleAndAdd(lensOffset, lensOffset, u, offsetY);
+
+    // Apply jitter to the camera position for this specific frame
+    vec3.add(this.jitteredPosition, this.position, lensOffset);
+
+    // 5. Calculate Rays
+    // Rays now point from the jittered offset on the lens to the static focus plane
+    vec3.sub(this.ray00, p00, this.jitteredPosition);
+    vec3.sub(this.ray10, p10, this.jitteredPosition);
+    vec3.sub(this.ray01, p01, this.jitteredPosition);
+    vec3.sub(this.ray11, p11, this.jitteredPosition);
   }
   lookAt(x,y,z) {
     this.target = vec3.fromValues(x,y,z);
@@ -1767,9 +1821,11 @@ class Renderer {
     const { canvas, device, uBuf } = this;
 
     const cam = this.scene.camera;
+    cam.updateRays2();
     const uData = new Float32Array(24);
-    new Uint32Array(uData.buffer).set([this.frame, canvas.width, canvas.height, 0]);
-    uData.set([...cam.position, 0], 4); 
+    new Uint32Array(uData.buffer).set([this.frame, canvas.width, canvas.height]);
+    uData.set([cam.exposure], 3);
+    uData.set([...cam.jitteredPosition, 0], 4); 
     uData.set([...cam.ray00, 0], 8); 
     uData.set([...cam.ray10, 0], 12);
     uData.set([...cam.ray01, 0], 16); 

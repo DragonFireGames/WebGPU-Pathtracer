@@ -14,7 +14,7 @@ struct Ray {
   direction: vec3f
 };
 struct SceneParams {
-  frame_count: u32, width: u32, height: u32, padding: u32,
+  frame_count: u32, width: u32, height: u32, exposure: f32,
   eye: vec4f, ray00: vec4f, ray10: vec4f, ray01: vec4f, ray11: vec4f 
 };
 
@@ -136,7 +136,7 @@ fn random_unit_vector() -> vec3f {
 }
 
 fn sample_texture(idx: i32, uv: vec2f) -> vec4f {
-  let nuv = vec2f(uv.x,1.-uv.y);
+  let nuv = vec2f(uv.x,uv.y);
   if (idx == 0) { return textureSampleLevel(t0, texture_sampler, nuv, 0.0); }
   else if (idx == 1) { return textureSampleLevel(t1, texture_sampler, nuv, 0.0); }
   else if (idx == 2) { return textureSampleLevel(t2, texture_sampler, nuv, 0.0); }
@@ -1078,8 +1078,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   let weight = 1.0 / f32(params.frame_count + 1u);
   let old_c = accum_buffer[idx].rgb;
-  let final_c = mix(old_c, radiance, weight);
+  var final_c = mix(old_c, radiance, weight);
   accum_buffer[idx] = vec4f(final_c, 1.0);
+
+  final_c *= vec3f(params.exposure);
+  //final_c = final_c / (final_c + vec3(1.0));
+  final_c = pow(final_c, vec3f(0.4545));
   
-  textureStore(output_tex, id.xy, vec4f(pow(final_c, vec3f(0.4545)), 1.0));
+  textureStore(output_tex, id.xy, vec4f(final_c, 1.0));
 }
