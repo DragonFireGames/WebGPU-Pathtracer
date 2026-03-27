@@ -927,7 +927,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let ctx = get_surface_context(hit, mat, tbn, final_uv);
 
     radiance += throughput * ctx.emittance;
-    if (length(ctx.emittance) > 0.1) { break; }
+    if (length(ctx.emittance) > 1) { break; }
 
     /*
     // Use true geometric normal for origin offset to prevent shadow acne from displaced normals
