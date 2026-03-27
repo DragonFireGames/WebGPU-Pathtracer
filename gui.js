@@ -405,7 +405,7 @@ window.createVAOWithBuffers = (p, n, i, u) => {
   gl.enableVertexAttribArray(2); 
   gl.vertexAttribPointer(2, 2, gl.FLOAT, false, 0, 0);
 
-  const iBuf = b(new Uint16Array(i), gl.ELEMENT_ARRAY_BUFFER); 
+  const iBuf = b(new Uint32Array(i), gl.ELEMENT_ARRAY_BUFFER); 
   
   return { vao, count: i.length, pBuf, nBuf, uBuf, iBuf };
 };
@@ -462,7 +462,7 @@ function draw() {
   // Draw Grid
   gl.uniformMatrix4fv(locs.mvp, false, vp); gl.uniformMatrix4fv(locs.model, false, mat4.create());
   gl.uniform1i(locs.mode, 1); gl.uniform4f(locs.color, 0.2, 0.2, 0.2, 1);
-  gl.bindVertexArray(gridGeo.vao); gl.drawElements(gl.LINES, gridGeo.count, gl.UNSIGNED_SHORT, 0);
+  gl.bindVertexArray(gridGeo.vao); gl.drawElements(gl.LINES, gridGeo.count, gl.UNSIGNED_INT, 0);
 
   State.nodes.forEach(n => {
     n.updateMatrix(); const mvp = mat4.mul(mat4.create(), vp, n.matrix);
@@ -475,7 +475,7 @@ function draw() {
 
     setMaterialUniforms(n.material);
 
-    gl.drawElements(gl.TRIANGLES, n.vaoData.count, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.TRIANGLES, n.vaoData.count, gl.UNSIGNED_INT, 0);
     
     // Draw Selection Highlight (Using the scalable wireframe box)
     // if(State.selected?.id === n.id) {
@@ -489,7 +489,7 @@ function draw() {
       
     //   // For models and complex objects, highlighting the AABB bounds is usually best
     //   gl.bindVertexArray(lineCubeGeo.vao); 
-    //   gl.drawElements(gl.LINES, lineCubeGeo.count, gl.UNSIGNED_SHORT, 0);
+    //   gl.drawElements(gl.LINES, lineCubeGeo.count, gl.UNSIGNED_INT, 0);
     // }
   });
 
@@ -509,7 +509,7 @@ function draw() {
     
     // For models and complex objects, highlighting the AABB bounds is usually best
     gl.bindVertexArray(lineCubeGeo.vao); 
-    gl.drawElements(gl.LINES, lineCubeGeo.count, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(gl.LINES, lineCubeGeo.count, gl.UNSIGNED_INT, 0);
 
     if (State.tool === 't') {
       [{id:'x',c:[1,0,0,1],r:[0,0,-Math.PI/2]},{id:'y',c:[0,1,0,1],r:[0,0,0]},{id:'z',c:[0,0,1,1],r:[Math.PI/2,0,0]}].forEach(a => {
@@ -517,7 +517,7 @@ function draw() {
         let stem = mat4.scale(mat4.clone(m), mat4.translate(mat4.clone(m), m, [0, 0.5*s, 0]), [0.03*s, 1*s, 0.03*s]);
         gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, stem));
         gl.uniform4fv(locs.color, Interact.activeAxis===a.id?[1,1,0,1]:a.c); gl.uniform1i(locs.mode, 1);
-        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_SHORT, 0);
+        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_INT, 0);
       });
       [{id:'xy',c:[1,1,0,0.3],r:[-Math.PI/2,0,0]},{id:'yz',c:[0,1,1,0.3],r:[0,0,Math.PI/2]},{id:'xz',c:[1,0,1,0.3],r:[0,0,0]}].forEach(p => {
         let m = mat4.clone(gPos); mat4.rotateX(m,m,p.r[0]); mat4.rotateZ(m,m,p.r[2]);
@@ -525,7 +525,7 @@ function draw() {
         gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, m)); gl.uniform4fv(locs.color, Interact.activeAxis===p.id?[1,1,0,0.7]:p.c);
         gl.uniform1i(locs.mode, 1);
-        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_SHORT, 0);
+        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_INT, 0);
         gl.disable(gl.BLEND);
       });
     } else if (State.tool === 's') {
@@ -537,9 +537,9 @@ function draw() {
         let stem = mat4.scale(mat4.clone(m), mat4.translate(mat4.clone(m), m, [0, 0.5*s, 0]), [0.03*s, 1*s, 0.03*s]);
         gl.uniform1i(locs.mode, 1);
         gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, stem)); gl.uniform4fv(locs.color, Interact.activeAxis===a.id?[1,1,0,1]:a.c);
-        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_SHORT, 0);
+        gl.bindVertexArray(cubeGeo.vao); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_INT, 0);
         let head = mat4.scale(mat4.clone(m), mat4.translate(mat4.clone(m), m, [0, 1.1*s, 0]), [0.15*s, 0.15*s, 0.15*s]);
-        gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, head)); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_SHORT, 0);
+        gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, head)); gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_INT, 0);
       });
       let mCenter = mat4.clone(gPos); mat4.mul(mCenter, mCenter, gRot);
       let centerCube = mat4.scale(mat4.create(), mCenter, [0.25 * s, 0.25 * s, 0.25 * s]);
@@ -547,19 +547,19 @@ function draw() {
       gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, centerCube));
       gl.uniform4fv(locs.color, Interact.activeAxis === 'all' ? [1, 1, 0, 1] : [1, 1, 1, 1]);
       gl.bindVertexArray(cubeGeo.vao);
-      gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(gl.TRIANGLES, cubeGeo.count, gl.UNSIGNED_INT, 0);
     } else if (State.tool === 'r') {
       [{id:'x',c:[1,0,0,1],r:[0,0,Math.PI/2]},{id:'y',c:[0,1,0,1],r:[0,0,0]},{id:'z',c:[0,0,1,1],r:[Math.PI/2,0,0]}].forEach(r => {
         let m = mat4.clone(gPos); mat4.rotateX(m,m,r.r[0]); mat4.rotateZ(m,m,r.r[2]); mat4.scale(m,m,[s,s,s]);
         gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, m)); gl.uniform4fv(locs.color, Interact.activeAxis===r.id?[1,1,0,1]:r.c);
         gl.uniform1i(locs.mode, 1);
-        gl.bindVertexArray(circleGeo.vao); gl.drawElements(gl.LINES, circleGeo.count, gl.UNSIGNED_SHORT, 0);
+        gl.bindVertexArray(circleGeo.vao); gl.drawElements(gl.LINES, circleGeo.count, gl.UNSIGNED_INT, 0);
       });
       let outer = mat4.targetTo(mat4.create(), State.selected.position, Cam.position, [0,1,0]);
       mat4.rotateX(outer, outer, Math.PI/2); mat4.scale(outer, outer, [s*1.3, s*1.3, s*1.3]);
       gl.uniformMatrix4fv(locs.mvp, false, mat4.mul(mat4.create(), vp, outer)); gl.uniform4fv(locs.color, Interact.activeAxis==='cam'?[1,1,0,1]:[1,1,1,0.5]);
       gl.uniform1i(locs.mode, 1);
-      gl.drawElements(gl.LINES, circleGeo.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(gl.LINES, circleGeo.count, gl.UNSIGNED_INT, 0);
     }
   }
 }
@@ -665,7 +665,7 @@ function generateMaterialPreview(material, size = 256) {
       
       setMaterialUniforms(material);
 
-      gl.drawElements(gl.TRIANGLES, sphereGeo.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(gl.TRIANGLES, sphereGeo.count, gl.UNSIGNED_INT, 0);
     }
   },size);
   material.urlData = url;
@@ -706,7 +706,7 @@ function generateModelPreview(modeldata, size = 256) {
       
       setMaterialUniforms(modelObj.material);
 
-      gl.drawElements(gl.TRIANGLES, modelObj.vaoData.count, gl.UNSIGNED_SHORT, 0);
+      gl.drawElements(gl.TRIANGLES, modelObj.vaoData.count, gl.UNSIGNED_INT, 0);
     }
   },size);
 
