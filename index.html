@@ -200,6 +200,92 @@
 			<div class="context-item" id="ctx-duplicate">Duplicate</div>
 		</div>
 
+		<div
+			id="keyframe-context-menu"
+			class="context-menu"
+			style="display: none"
+		>
+			<div class="context-item context-submenu">
+				Set Easing Style
+				<div class="context-submenu-items">
+					<div
+						class="context-item"
+						onclick="
+							AnimationPanel.setKeyframeEasing(
+								window.currentKeyframeContext.nodeId,
+								window.currentKeyframeContext.time,
+								'linear',
+							);
+							document.getElementById(
+								'keyframe-context-menu',
+							).style.display = 'none';
+						"
+					>
+						Linear
+					</div>
+					<div
+						class="context-item"
+						onclick="
+							AnimationPanel.setKeyframeEasing(
+								window.currentKeyframeContext.nodeId,
+								window.currentKeyframeContext.time,
+								'quadratic',
+							);
+							document.getElementById(
+								'keyframe-context-menu',
+							).style.display = 'none';
+						"
+					>
+						Quadratic
+					</div>
+					<div
+						class="context-item"
+						onclick="
+							AnimationPanel.setKeyframeEasing(
+								window.currentKeyframeContext.nodeId,
+								window.currentKeyframeContext.time,
+								'cubic',
+							);
+							document.getElementById(
+								'keyframe-context-menu',
+							).style.display = 'none';
+						"
+					>
+						Cubic
+					</div>
+					<div
+						class="context-item"
+						onclick="
+							AnimationPanel.setKeyframeEasing(
+								window.currentKeyframeContext.nodeId,
+								window.currentKeyframeContext.time,
+								'exponential',
+							);
+							document.getElementById(
+								'keyframe-context-menu',
+							).style.display = 'none';
+						"
+					>
+						Exponential
+					</div>
+				</div>
+			</div>
+			<div
+				class="context-item"
+				onclick="
+					AnimationPanel.removeKeyframe(
+						window.currentKeyframeContext.nodeId,
+						window.currentKeyframeContext.time,
+					);
+					document.getElementById(
+						'keyframe-context-menu',
+					).style.display = 'none';
+				"
+			>
+				Delete Keyframe
+			</div>
+		</div>
+
 		<div id="render-modal" class="modal-overlay" style="display: none">
 			<div class="render-popup">
 				<div class="render-header">

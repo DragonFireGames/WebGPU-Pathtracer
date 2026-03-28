@@ -1995,7 +1995,11 @@ document.getElementById("ctx-duplicate").onclick = () => {
 		selectNode(c.id);
 	}
 };
-window.onclick = () => (ctxMenu.style.display = "none");
+window.onclick = () => {
+	ctxMenu.style.display = "none";
+	const keyframeMenu = document.getElementById("keyframe-context-menu");
+	if (keyframeMenu) keyframeMenu.style.display = "none";
+};
 window.onkeydown = (e) => {
 	if (e.key === " ") {
 		e.preventDefault();

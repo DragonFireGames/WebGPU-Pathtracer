@@ -8,6 +8,16 @@ const AnimationPanel = {
 	lastFrameTime: 0,
 	animationFrameId: null,
 
+	reset() {
+		this.items = new Map();
+		this.keyframes = new Map();
+		this.isPlaying = false;
+		this.currentTime = 0;
+		this.duration = 60;
+		this.lastFrameTime = 0;
+		this.animationFrameId = null;
+	},
+
 	addItem(nodeId, nodeName) {
 		if (!this.items.has(nodeId)) {
 			this.items.set(nodeId, nodeName);
@@ -39,6 +49,7 @@ const AnimationPanel = {
 			position: [...node.position],
 			rotation: [...node.rotation],
 			scale: [...node.scale],
+			easing: "linear",
 		};
 
 		// Remove existing keyframe at this time if it exists
@@ -126,6 +137,28 @@ const AnimationPanel = {
 		}
 	},
 
+	easingFunctions: {
+		linear: (t) => t,
+		quadratic: (t) => t * t,
+		cubic: (t) => t * t * t,
+		exponential: (t) => (t === 0 ? 0 : Math.pow(2, 10 * t - 10)),
+	},
+
+	applyEasing(t, easingType = "linear") {
+		const fn =
+			this.easingFunctions[easingType] || this.easingFunctions.linear;
+		return fn(t);
+	},
+
+	setKeyframeEasing(nodeId, time, easingType) {
+		const keyframes = this.keyframes.get(nodeId) || [];
+		const keyframe = keyframes.find((k) => Math.abs(k.time - time) < 0.01);
+		if (keyframe) {
+			keyframe.easing = easingType;
+			this.render();
+		}
+	},
+
 	lerp(a, b, t) {
 		return a + (b - a) * t;
 	},
@@ -159,8 +192,9 @@ const AnimationPanel = {
 			}
 
 			if (kf1 && kf2 && kf1 !== kf2) {
-				// Interpolate between keyframes
-				const t = (this.currentTime - kf1.time) / (kf2.time - kf1.time);
+				// Interpolate between keyframes with easing
+				let t = (this.currentTime - kf1.time) / (kf2.time - kf1.time);
+				t = this.applyEasing(t, kf1.easing);
 				node.position = this.interpolateVector(
 					kf1.position,
 					kf2.position,
@@ -206,8 +240,11 @@ const AnimationPanel = {
           <div 
             class="animation-keyframe" 
             style="left: ${(kf.time / this.duration) * 100}%"
-            onclick="AnimationPanel.removeKeyframe('${id}', ${kf.time})" 
-            title="Click to remove keyframe at ${kf.time.toFixed(2)}s"
+            data-node-id="${id}"
+            data-keyframe-time="${kf.time}"
+            data-easing="${kf.easing || "linear"}"
+            oncontextmenu="AnimationPanel.showKeyframeMenu(event, '${id}', ${kf.time})" 
+            title="${kf.easing || "linear"} - Right-click for options"
           >◆</div>
         `,
 					)
@@ -225,6 +262,19 @@ const AnimationPanel = {
 			})
 			.join("");
 		this.updateSeeker();
+	},
+
+	showKeyframeMenu(event, nodeId, time) {
+		event.preventDefault();
+		const menu = document.getElementById("keyframe-context-menu");
+		if (!menu) return;
+
+		menu.style.display = "block";
+		menu.style.left = event.clientX + "px";
+		menu.style.top = event.clientY + "px";
+
+		// Store current keyframe info for menu actions
+		window.currentKeyframeContext = { nodeId, time };
 	},
 };
 

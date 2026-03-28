@@ -66,12 +66,21 @@ body {
 }
 .tex-slot.drag-over { border-color: var(--accent); background: #1a1a1a; color: #fff; }
 
-#context-menu {
+#context-menu, #keyframe-context-menu {
 	position: fixed; display: none; background: #252525; border: 1px solid #444; 
 	border-radius: 4px; padding: 4px 0; z-index: 1000; min-width: 120px;
 }
-.context-item { padding: 6px 12px; font-size: 12px; cursor: pointer; color: #ccc; }
+.context-item { padding: 6px 12px; font-size: 12px; cursor: pointer; color: #ccc; position: relative; }
 .context-item:hover { background: var(--accent); color: white; }
+.context-submenu { padding-right: 20px; }
+.context-submenu::after { content: '▶'; position: absolute; right: 6px; }
+.context-submenu-items { 
+	display: none; position: absolute; left: 100%; top: 0; background: #252525; border: 1px solid #444;
+	border-radius: 4px; padding: 4px 0; min-width: 120px;
+}
+.context-submenu:hover .context-submenu-items { display: block; }
+.context-submenu-items .context-item { padding: 6px 12px; }
+.context-submenu-items .context-item:hover { background: var(--accent); color: white; }
 
 .controls-hint { position: absolute; bottom: 12px; left: 12px; background: rgba(0,0,0,0.8); padding: 6px 12px; border-radius: 4px; font-size: 10px; color: #888; pointer-events: none; }
 .btn-small { background: #333; border: none; color: #ccc; font-size: 9px; padding: 2px 6px; border-radius: 2px; cursor: pointer; }
@@ -121,8 +130,17 @@ body {
 }
 .animation-keyframe {
 	position: absolute; top: 50%; transform: translateY(-50%) translateX(-50%); 
-	font-size: 14px; color: var(--accent); cursor: pointer; user-select: none;
+	font-size: 14px; cursor: pointer; user-select: none;
 	transition: all 0.1s; z-index: 5;
+}
+.animation-keyframe[data-easing=linear] {
+  color: rgb(0, 183, 255);
+}
+.animation-keyframe[data-easing=quadratic] {
+  color: rgb(111, 255, 54);
+}
+.animation-keyframe[data-easing=exponential] {
+  color: rgb(181, 54, 255)
 }
 .animation-keyframe:hover { color: #fff; text-shadow: 0 0 8px rgba(0, 127, 212, 0.7); }
 .animation-keyframe-slots {
