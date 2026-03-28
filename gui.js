@@ -1232,6 +1232,8 @@ const renderList = () => {
 		el.className = `node-item ${State.selected?.id === n.id ? "selected" : ""}`;
 		el.innerHTML = `<span>${n.icon}</span> ${n.name}`;
 		el.onclick = () => selectNode(n.id);
+		el.draggable = true;
+		el.ondragstart = (e) => e.dataTransfer.setData("text/plain", n.id);
 		el.oncontextmenu = (e) => {
 			e.preventDefault();
 			selectNode(n.id);
@@ -1942,6 +1944,21 @@ window.handleUpload = (input) => {
 };
 
 const ctxMenu = document.getElementById("context-menu");
+document.getElementById("ctx-add-animation").onclick = () => {
+	if (State.selected) {
+		AnimationPanel.addItem(State.selected.id, State.selected.name);
+		// Switch to animation tab
+		const animTab = document.querySelector('[data-tab="animation"]');
+		if (animTab) animTab.click();
+	}
+	ctxMenu.style.display = "none";
+};
+document.getElementById("ctx-insert-keyframe").onclick = () => {
+	if (State.selected) {
+		AnimationPanel.insertKeyframe(State.selected.id);
+	}
+	ctxMenu.style.display = "none";
+};
 document.getElementById("ctx-delete").onclick = () => {
 	if (State.selected)
 		State.nodes = State.nodes.filter((n) => n.id !== State.selected.id);
@@ -1980,6 +1997,11 @@ document.getElementById("ctx-duplicate").onclick = () => {
 };
 window.onclick = () => (ctxMenu.style.display = "none");
 window.onkeydown = (e) => {
+	if (e.key === " ") {
+		e.preventDefault();
+		AnimationPanel.togglePlay();
+		return;
+	}
 	if (e.key === "Delete" || e.key === "Backspace")
 		document.getElementById("ctx-delete").click();
 	if (e.target.tagName.match(/INPUT/)) return;
@@ -2126,6 +2148,23 @@ setupGutter("gutter-left", "left-panel", "x");
 setupGutter("gutter-right", "right-panel", "x");
 setupGutter("gutter-bottom", "bottom-panel", "y");
 
+// Setup bottom panel tabs
+document.querySelectorAll(".panel-tab").forEach((tab) => {
+	tab.addEventListener("click", () => {
+		const tabName = tab.getAttribute("data-tab");
+		// Remove active class from all tabs and panes
+		document
+			.querySelectorAll(".panel-tab")
+			.forEach((t) => t.classList.remove("active"));
+		document
+			.querySelectorAll(".tab-pane")
+			.forEach((p) => p.classList.remove("active"));
+		// Add active class to clicked tab and corresponding pane
+		tab.classList.add("active");
+		document.getElementById(tabName + "-tab").classList.add("active");
+	});
+});
+
 var renderActive = null;
 function loop() {
 	if (renderActive) {
@@ -2151,6 +2190,7 @@ const initNode = State.scene.newCube(
 State.nodes.push(initNode);
 selectNode(initNode.id);
 renderAssets();
+initializeAnimation(); // Initialize animation system
 loop();
 
 function openRenderPopup() {
