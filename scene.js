@@ -112,7 +112,7 @@ var SceneList = [
       
       //var t = scene.newTorus("Torus",matRedGlass,0.5);
       //t.translate(0,1,0);
-      //scene.newFrustum("Frustum",matRedGlass).orient(-1.5,0,-1,0.2,-1.5,1,-1,0.2)
+      //scene.newCylinder("Cylinder",matRedGlass).orient(-1.5,0,-1,0.2,-1.5,1,-1,0.2)
 
       // var model2 = scene.newModel("Bunny",matCeramic,bunnyModel);
       // model2.scaleMult(0.5,0.5,0.5);
@@ -251,7 +251,7 @@ var SceneList = [
       // scene.newModel("Diamond 2",matDiamond, diamondModel).translate(-1.5, 0, 1);
 
       // NEW FRUSTUM: Using it as a glass pedestal
-      scene.newFrustum("Pedestal",matGlass).orient(0,0,0, 1, 0,1,0, 0.7);
+      scene.newCylinder("Pedestal",matGlass).orient(0,0,0, 1, 0,1,0, 0.7);
 
       scene.bounces = 12;
       return scene;
@@ -351,7 +351,7 @@ var SceneList = [
           } else if (r < 1) {
             scene.newCube("Cube "+index, mat, x-radius, y-radius, z-radius, x+radius, y+radius, z+radius);
           } else if (r < 0.6) {
-            scene.newFrustum("Cylinder "+index, mat).orient(x, y-radius, z, radius, x, y+radius, z, radius);
+            scene.newCylinder("Cylinder "+index, mat).orient(x, y-radius, z, radius, x, y+radius, z, radius);
           } else if (r < 0.8) {
             scene.newTorus("Torus "+index, mat, radius*0.75,radius*0.25).translate(x,y-radius*0.5,z);
           } else {
@@ -393,7 +393,7 @@ var SceneList = [
       var bunnyNormal = new Texture('assets/bunny/normal.png', 'Bunny Normals');
       var bunnyRoughness = new Texture('assets/bunny/roughness.jpeg', 'Bunny Roughness');
 
-      scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/venice_sunset_2k.hdr');
+      scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/venice_sunset_2k.hdr','Venice Sunset');
       
       await Promise.all([
         // woodTex.loaded, 
@@ -478,6 +478,7 @@ async function loadScene() {
     if (data.length == 4) {
       State.backgroundColor = [data[0],data[1],data[2]];
       State.backgroundIntensity = 1;
+      State.background = null;
     } else {
       State.backgroundColor = [1,1,1];
       State.backgroundIntensity = 1;
@@ -507,6 +508,7 @@ async function loadScene() {
   renderInspector();
   renderAssets();
 	AnimationPanel.reset();
+  AnimationPanel.updateUI();
 }
 
 /*var renderer;
