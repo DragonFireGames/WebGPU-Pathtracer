@@ -1004,7 +1004,7 @@ const renderInspector = () => {
       geo.add(n, 'inner_radius', 0, 1).name('Radius').onChange(onGeoUpdate);
       //geo.add(n, 'radius', 0.1, 5).name('Radius').onChange(onGeoUpdate);
       //geo.add(n, 'tube', 0.05, 2).name('Tube Radius').onChange(onGeoUpdate);
-    } else if (n instanceof Frustum) {
+    } else if (n instanceof Cylinder) {
       geo.add(n, 'top_radius', 0, 1).name('Top Radius').onChange(onGeoUpdate);
       //geo.add(n, 'radiusTop', 0.0, 5).name('Top Radius').onChange(onGeoUpdate);
       //geo.add(n, 'radiusBottom', 0.0, 5).name('Bottom Radius').onChange(onGeoUpdate);
@@ -1151,9 +1151,9 @@ document.getElementById('primitiveSelect').oninput = (e) => {
     n = State.scene.newSphere("Sphere "+State.idCounter,mat,0,1,0,1);
     n.name = "Sphere " + State.idCounter;
   } else if (type === 'cylinder') {
-    n = State.scene.newFrustum("Cylinder "+State.idCounter,mat).orient(0,0,0,1,0,2,0,1);
+    n = State.scene.newCylinder("Cylinder "+State.idCounter,mat).orient(0,0,0,1,0,2,0,1);
   } else if (type === 'cone') {
-    n = State.scene.newFrustum("Cone "+State.idCounter,mat).orient(0,0,0,1,0,2,0,0); n.icon = "🍦";
+    n = State.scene.newCylinder("Cone "+State.idCounter,mat).orient(0,0,0,1,0,2,0,0); n.icon = "🍦";
   } else if (type === 'torus') {
     n = State.scene.newTorus("Torus "+State.idCounter,mat,1,0.5).translate(0,1,0).scaleMult(2,2,2);
   } else if (type === 'plane') {
@@ -1164,8 +1164,8 @@ document.getElementById('primitiveSelect').oninput = (e) => {
   e.target.value = ''; // Reset dropdown visually
 };
 
-window.createMaterial = () => {
-  const mat = new Material("Material "+(State.assets.length+1),0,[1,1,1],0.5,[0,0,0]);
+window.createMaterial = (color) => {
+  const mat = new Material("Material "+(State.assets.length+1),0,color||[1,1,1],0.5,[0,0,0]);
   State.assets.push(mat); renderAssets(); selectAsset(mat);
   return mat;
 };
@@ -1284,7 +1284,7 @@ function updateSceneCam() {
   cam.position = vec3.fromValues(...Cam.position);
   cam.target = vec3.fromValues(...Cam.target);
   cam.updateRays();
-  if (renderer) renderer.frame = 0;
+  if (renderer) renderer.reset();
 }
 gl_canvas.onmousedown = e => {
   const ray = MathUtils.getRay(e.clientX, e.clientY, gl_canvas, Cam.proj, Cam.view), gizmo = Interact.testGizmo(ray);
@@ -1361,9 +1361,9 @@ document.querySelectorAll(".panel-tab").forEach((tab) => {
 });
 
 var renderActive = null;
-function loop() { 
+async function loop() { 
   if (renderActive) {
-    renderActive();
+    await renderActive();
   } else {
     Cam.update(gl_canvas.width/gl_canvas.height); 
     draw();
@@ -1372,7 +1372,7 @@ function loop() {
 }
 
 // Initial Setup
-const initNode = State.scene.newCube("Cube 1",createMaterial(),-1,0,-1,1,2,1);
+const initNode = State.scene.newCube("Cube 1",createMaterial([0.8,0.8,0.8]),-1,0,-1,1,2,1);
 State.nodes.push(initNode); selectNode(initNode.id); renderAssets(); initializeAnimation(); loop();
 
 function openRenderPopup() {
@@ -1404,22 +1404,7 @@ function SaveRender(name) {
   link.click();
   ui.count++;
 }
-var sceneLoaded = false;
-async function startRender() {
-  if (renderActive && sceneLoaded) {
-    SaveRender('render-'+renderer.frame);
-    return;
-  }
-  const canvas = document.getElementById('gpuCanvas');
-  const status = document.getElementById('render-stats');
-  sceneLoaded = false;
-  status.innerText = 'Status: Loading Scene...';
-
-  renderer = new Renderer(canvas);
-  await renderer.init();
-  
-  //var scene = await SceneList[SelectedScene].create(canvas);
-  var scene = State.scene;
+function updateScene(scene) {
   scene.objects = State.nodes;
   var col = State.backgroundColor;
   var mod = State.backgroundIntensity;
@@ -1434,19 +1419,175 @@ async function startRender() {
   scene.camera.focusDist = Cam.focusDist;
   scene.camera.exposure = Cam.exposure;
   scene.camera.updateRays();
+}
+var sceneLoaded = false;
+function startClicked() {
+  if (renderActive && sceneLoaded) {
+    SaveRender('render-'+renderer.frame);
+    return;
+  }
+  var type = Number(prompt("Enter type:\nPhoto = 0, Animation = 1, Simulation = 2")||0);
+  if (type == 1) {
+    var fps = Number(prompt("Enter framerate:","24")||24);
+    var samps = Number(prompt("Enter samples per frame:","128")||128);
+    var duration = 0;
+    for (var i of AnimationPanel.keyframes) {
+      for (var j = 0; j < i[1].length; j++) duration = Math.max(duration,i[1][j].time);
+    }
+    if (duration > 0) startAnimation(fps,samps,duration);
+  } else if (type == 2) {
+    var fps = Number(prompt("Enter framerate:","24")||24);
+    var samps = Number(prompt("Enter samples per frame:","128")||128);
+    var duration = Number(prompt("Enter duration:","1")||1);
+    startSimulation(fps,samps,duration);
+  } else {
+    startRender();
+  }
+}
+async function startRender() {
+  const canvas = document.getElementById('gpuCanvas');
+  const status = document.getElementById('render-stats');
+  sceneLoaded = false;
+  status.innerText = 'Status: Loading Scene...';
 
+  renderer = new Renderer(canvas);
+  await renderer.init();
+  
+  //var scene = await SceneList[SelectedScene].create(canvas);
+  const scene = State.scene;
+  updateScene(scene);
   await renderer.setScene(scene);
 
   sceneLoaded = true;
   status.innerText = 'Status: Rendering...';
 
   const sppElement = document.getElementById('spp');
-  renderActive = function() {
+  renderActive = async function() {
     renderer.render();
     sppElement.innerText = renderer.frame;
   }
 
   document.getElementById('btn-start-render').textContent = "SAVE RENDER";
+}
+async function startAnimation(fps,samples,duration) {
+  await RecordVideo((time)=>{
+    AnimationPanel.currentTime = time;
+    AnimationPanel.updateAnimatedEntities();
+    return true;
+  },fps,samples,duration,()=>{
+    AnimationPanel.currentTime = 0;
+    AnimationPanel.updateUI();
+  });
+}
+async function startSimulation(fps,samp,dur) {
+  //var samp = parseInt(document.getElementById("samples").value);
+  //var fps = parseInt(document.getElementById("fps").value);
+  //var dur = parseFloat(document.getElementById("duration").value);
+
+  var physics = new PhysicsController(State.scene.objects);
+  var motionblur = true;
+  RecordVideo((time)=>{
+    if (time == 0) return;
+    if (motionblur) {
+      physics.update(1/fps/samp);
+    } else {
+      if (t % 1 != 0) return;
+      physics.update(1/fps);
+    }
+    return true;
+  },fps,samp,dur,()=>{
+    physics.reset();
+  });
+}
+
+async function RecordVideo(animate,fps,samples,duration,callback) {
+  const canvas = document.getElementById('gpuCanvas');
+  const status = document.getElementById('render-stats');
+  sceneLoaded = false;
+  status.innerText = 'Status: Loading Scene...';
+
+  //if (!renderer) {
+    renderer = new Renderer(canvas);
+    await renderer.init();
+  //}
+  
+  console.log("Begin Recording");
+  
+  var encoder = new Whammy.Video(fps); 
+  window._encoder = encoder;
+
+  var scene = State.scene;
+  animate(0);
+  updateScene(scene);
+  await renderer.setScene(scene);
+
+  sceneLoaded = true;
+  status.innerText = 'Status: Rendering...';
+
+  if (typeof animate !== 'function') animate = ()=>{};
+
+  var frames = Math.ceil(fps*duration);
+  const sppElement = document.getElementById('spp');
+  var counter = 0;
+  renderActive = async function() {
+    if (encoder._stop) renderActive = null;
+    counter++;
+    var time = counter / fps / samples;
+    if (animate(time)) await renderer.updateObjects();
+    if (counter % samples == 0) {
+      status.innerText = "Status: Rendered Frame "+Math.floor(counter/samples)+"/"+frames;
+      var data = canvas.toDataURL('image/webp', 0.95);
+      encoder.add(data);
+      renderer.reset();
+    }
+    renderer.render();
+    sppElement.innerText = renderer.frame + " / " + samples;
+    if (counter >= samples*frames) {
+      console.log("Starting Compile");
+      status.innerText = 'Status: Starting Compile';
+      console.log(encoder);
+      encoder.compile(false, output => {
+        console.log("Compiled");
+        
+        var url = (window.webkitURL || window.URL).createObjectURL(output);
+        //console.log(url);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'recording.webm';
+        document.body.appendChild(link);
+        link.click();
+        
+        //*
+        (window.webkitURL || window.URL).revokeObjectURL(url);
+        /*/
+        const video = document.createElement('video');
+        video.src = url;
+        video.addEventListener('error', (e) => {
+          console.error('Video playback error:', e.target.error);
+          console.log('Error details:', {
+            code: e.target.error.code,
+            message: e.target.error.message
+          });
+        });
+        video.addEventListener('loadedmetadata', () => {
+          console.log('Video metadata:', {
+            duration: video.duration,
+            width: video.videoWidth,
+            height: video.videoHeight
+          });
+        });
+        document.body.appendChild(video);
+        */
+        
+        if (typeof callback == 'function') callback(output);
+        renderActive = null;
+        status.innerText = 'Status: Finished!';
+        renderer.clear();
+        console.log("End Recording");
+      });
+    }
+  }
 }
 
 function closeRenderPopup() {
@@ -1463,7 +1604,7 @@ document.getElementById('render-w').onchange = (e) => {
   var cam = State.scene.camera;
   cam.aspect = canvas.width / canvas.height;
   cam.updateRays(); 
-  if (renderer) renderer.frame = 0;
+  if (renderer) renderer.reset();
 };
 document.getElementById('render-h').onchange = (e) => {
   //if (renderActive) return;
@@ -1472,5 +1613,5 @@ document.getElementById('render-h').onchange = (e) => {
   var cam = State.scene.camera;
   cam.aspect = canvas.width / canvas.height;
   cam.updateRays(); 
-  if (renderer) renderer.frame = 0;
+  if (renderer) renderer.reset();
 };
