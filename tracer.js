@@ -377,9 +377,9 @@ Cube.getSchema = function(cube) {
   ];
 }
 
-class Frustum extends Primitive {
+class Cylinder extends Primitive {
   constructor(name, material, top_radius = 0.5) {
-    super(name, material,"Frustum");
+    super(name, material,"Cylinder");
     this.icon = "🛢️";
     this.top_radius = top_radius; // In this context, it will act as a ratio
   }
@@ -476,7 +476,7 @@ class Frustum extends Primitive {
   // getBounds() {
   //   const worldMatrix = mat4.create();
   //   mat4.invert(worldMatrix, this.invMatrix);
-  //   // Frustum is defined y=0 to y=1, and x/z depends on radii
+  //   // Cylinder is defined y=0 to y=1, and x/z depends on radii
   //   const maxR = this.top_radius;
   //   return transformAABB([-maxR, 0, -maxR], [maxR, 1, maxR], worldMatrix);
   // }
@@ -511,13 +511,13 @@ class Frustum extends Primitive {
     return { min: finalMin, max: finalMax };
   }
 }
-Frustum.getSchema = function(frustum) {
-  if (!frustum) frustum = {material:{_index:-1}};
+Cylinder.getSchema = function(cylinder) {
+  if (!cylinder) cylinder = {material:{_index:-1}};
   return [
-    { type: "mat4x4f", data: frustum.invMatrix },
-    { type: "i32", data: frustum.material._index },
+    { type: "mat4x4f", data: cylinder.invMatrix },
+    { type: "i32", data: cylinder.material._index },
     { type: "i32", data: 3 },
-    { type: "f32", data: frustum.top_radius },
+    { type: "f32", data: cylinder.top_radius },
   ];
 }
 
@@ -1250,9 +1250,102 @@ Model.getSchema = function(mesh) {
   ];
 }
 
+class Camera {
+  constructor(canvas) {
+    this.position = vec3.fromValues(0, 1.5, 4.5);
+    this.target = vec3.fromValues(0, 0.5, 0);
+    this.fov = 45;
+    this.aperture = 0;
+    this.focusDist = 1;
+    this.exposure = 1;
+    this.aspect = canvas.width / canvas.height;
+    this.ray00 = vec3.create(); this.ray10 = vec3.create();
+    this.ray01 = vec3.create(); this.ray11 = vec3.create();
+    this.updateRays();
+    this.jitteredPosition = vec3.fromValues([0,0,0]);
+  }
+  updateRays() {
+    // const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.target, this.position));
+    // const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
+    // const u = vec3.cross(vec3.create(), r, f);
+    // const h = Math.tan((this.fov * Math.PI / 180) / 2); 
+    // const w = h * this.aspect;
+    // const hr = vec3.scale(vec3.create(), r, w); 
+    // const hu = vec3.scale(vec3.create(), u, h);
+    // vec3.sub(this.ray00, f, hr); vec3.sub(this.ray00, this.ray00, hu);
+    // vec3.add(this.ray10, f, hr); vec3.sub(this.ray10, this.ray10, hu);
+    // vec3.sub(this.ray01, f, hr); vec3.add(this.ray01, this.ray01, hu);
+    // vec3.add(this.ray11, f, hr); vec3.add(this.ray11, this.ray11, hu);
+  }
+  updateRays2() {
+    // 1. Setup Camera Basis
+    const lookDir = vec3.sub(vec3.create(), this.target, this.position);
+    const focusDist = vec3.length(lookDir) * this.focusDist;
+    const f = vec3.normalize(vec3.create(), lookDir);
+    const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
+    const u = vec3.cross(vec3.create(), r, f);
+
+    // 2. Determine View Plane size at Focus Distance
+    // We calculate the plane dimensions specifically at the focusDist
+    const h = Math.tan((this.fov * Math.PI / 180) / 2) * focusDist;
+    const w = h * this.aspect;
+
+    const hr = vec3.scale(vec3.create(), r, w);
+    const hu = vec3.scale(vec3.create(), u, h);
+    const focusCenter = vec3.scaleAndAdd(vec3.create(), this.position, f, focusDist);
+
+    // 3. Define the 4 corners of the focus plane
+    const p00 = vec3.create();
+    const p10 = vec3.create();
+    const p01 = vec3.create();
+    const p11 = vec3.create();
+
+    vec3.sub(p00, focusCenter, hr); vec3.sub(p00, p00, hu);
+    vec3.add(p10, focusCenter, hr); vec3.sub(p10, p10, hu);
+    vec3.sub(p01, focusCenter, hr); vec3.add(p01, p01, hu);
+    vec3.add(p11, focusCenter, hr); vec3.add(p11, p11, hu);
+
+    // 4. Generate Lens Jitter (Unit Disk Sampling)
+    // We generate a random point inside a circle of radius 'aperture / 2'
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.sqrt(Math.random()) * (this.aperture * 0.5);
+    const offsetX = Math.cos(angle) * radius;
+    const offsetY = Math.sin(angle) * radius;
+
+    // Transform lens offset to world space basis (Right and Up vectors)
+    const lensOffset = vec3.create();
+    vec3.scaleAndAdd(lensOffset, lensOffset, r, offsetX);
+    vec3.scaleAndAdd(lensOffset, lensOffset, u, offsetY);
+
+    // Apply jitter to the camera position for this specific frame
+    vec3.add(this.jitteredPosition, this.position, lensOffset);
+
+    // 5. Calculate Rays
+    // Rays now point from the jittered offset on the lens to the static focus plane
+    vec3.sub(this.ray00, p00, this.jitteredPosition);
+    vec3.sub(this.ray10, p10, this.jitteredPosition);
+    vec3.sub(this.ray01, p01, this.jitteredPosition);
+    vec3.sub(this.ray11, p11, this.jitteredPosition);
+  }
+  lookAt(x,y,z) {
+    this.target = vec3.fromValues(x,y,z);
+    this.updateRays();
+  }
+  setPosition(x,y,z) {
+    this.position = vec3.fromValues(x,y,z);
+    this.updateRays();
+  }
+}
+
 class SceneBVHBuilder {
   constructor(objects) {
-    this.objects = objects;
+    this.objects = [];
+    this.rebuild(objects);
+  }
+
+  // NEW: Quick rebuild method
+  rebuild(newObjects = null) {
+    if (newObjects) this.objects = newObjects;
     this.nodes = [];
     this.build();
   }
@@ -1366,7 +1459,7 @@ class Scene {
   newSphere() { var o = new Sphere(...arguments); this.objects.push(o); return o; }
   newCube() { var o = new Cube(...arguments); this.objects.push(o); return o; }
   newPlane() { var o = new Plane(...arguments); this.objects.push(o); return o; }
-  newFrustum() { var o = new Frustum(...arguments); this.objects.push(o); return o; }
+  newCylinder() { var o = new Cylinder(...arguments); this.objects.push(o); return o; }
   newTorus() { var o = new Torus(...arguments); this.objects.push(o); return o; }
   newModel() { var o = new Model(...arguments); this.objects.push(o); return o; }
   getMaterials() {
@@ -1390,93 +1483,6 @@ class Scene {
   }
 }
 
-class Camera {
-  constructor(canvas) {
-    this.position = vec3.fromValues(0, 1.5, 4.5);
-    this.target = vec3.fromValues(0, 0.5, 0);
-    this.fov = 45;
-    this.aperture = 0;
-    this.focusDist = 1;
-    this.exposure = 1;
-    this.aspect = canvas.width / canvas.height;
-    this.ray00 = vec3.create(); this.ray10 = vec3.create();
-    this.ray01 = vec3.create(); this.ray11 = vec3.create();
-    this.updateRays();
-    this.jitteredPosition = vec3.fromValues([0,0,0]);
-  }
-  updateRays() {
-    // const f = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.target, this.position));
-    // const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
-    // const u = vec3.cross(vec3.create(), r, f);
-    // const h = Math.tan((this.fov * Math.PI / 180) / 2); 
-    // const w = h * this.aspect;
-    // const hr = vec3.scale(vec3.create(), r, w); 
-    // const hu = vec3.scale(vec3.create(), u, h);
-    // vec3.sub(this.ray00, f, hr); vec3.sub(this.ray00, this.ray00, hu);
-    // vec3.add(this.ray10, f, hr); vec3.sub(this.ray10, this.ray10, hu);
-    // vec3.sub(this.ray01, f, hr); vec3.add(this.ray01, this.ray01, hu);
-    // vec3.add(this.ray11, f, hr); vec3.add(this.ray11, this.ray11, hu);
-  }
-  updateRays2() {
-    // 1. Setup Camera Basis
-    const lookDir = vec3.sub(vec3.create(), this.target, this.position);
-    const focusDist = vec3.length(lookDir) * this.focusDist;
-    const f = vec3.normalize(vec3.create(), lookDir);
-    const r = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), f, [0, 1, 0]));
-    const u = vec3.cross(vec3.create(), r, f);
-
-    // 2. Determine View Plane size at Focus Distance
-    // We calculate the plane dimensions specifically at the focusDist
-    const h = Math.tan((this.fov * Math.PI / 180) / 2) * focusDist;
-    const w = h * this.aspect;
-
-    const hr = vec3.scale(vec3.create(), r, w);
-    const hu = vec3.scale(vec3.create(), u, h);
-    const focusCenter = vec3.scaleAndAdd(vec3.create(), this.position, f, focusDist);
-
-    // 3. Define the 4 corners of the focus plane
-    const p00 = vec3.create();
-    const p10 = vec3.create();
-    const p01 = vec3.create();
-    const p11 = vec3.create();
-
-    vec3.sub(p00, focusCenter, hr); vec3.sub(p00, p00, hu);
-    vec3.add(p10, focusCenter, hr); vec3.sub(p10, p10, hu);
-    vec3.sub(p01, focusCenter, hr); vec3.add(p01, p01, hu);
-    vec3.add(p11, focusCenter, hr); vec3.add(p11, p11, hu);
-
-    // 4. Generate Lens Jitter (Unit Disk Sampling)
-    // We generate a random point inside a circle of radius 'aperture / 2'
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.sqrt(Math.random()) * (this.aperture * 0.5);
-    const offsetX = Math.cos(angle) * radius;
-    const offsetY = Math.sin(angle) * radius;
-
-    // Transform lens offset to world space basis (Right and Up vectors)
-    const lensOffset = vec3.create();
-    vec3.scaleAndAdd(lensOffset, lensOffset, r, offsetX);
-    vec3.scaleAndAdd(lensOffset, lensOffset, u, offsetY);
-
-    // Apply jitter to the camera position for this specific frame
-    vec3.add(this.jitteredPosition, this.position, lensOffset);
-
-    // 5. Calculate Rays
-    // Rays now point from the jittered offset on the lens to the static focus plane
-    vec3.sub(this.ray00, p00, this.jitteredPosition);
-    vec3.sub(this.ray10, p10, this.jitteredPosition);
-    vec3.sub(this.ray01, p01, this.jitteredPosition);
-    vec3.sub(this.ray11, p11, this.jitteredPosition);
-  }
-  lookAt(x,y,z) {
-    this.target = vec3.fromValues(x,y,z);
-    this.updateRays();
-  }
-  setPosition(x,y,z) {
-    this.position = vec3.fromValues(x,y,z);
-    this.updateRays();
-  }
-}
-
 async function loadText(url) {
   var res = await fetch(url,{});
   return await res.text();
@@ -1488,8 +1494,11 @@ class Renderer {
     if (!navigator.gpu) return alert("WebGPU not supported.");
     this.canvas = canvas;
     this.context = canvas.getContext("webgpu");
+    if (!this.context) return alert("WebGPU not supported.");
     this.scene = null;
+    this.sceneBvh = new SceneBVHBuilder();
     this.frame = 0;
+    this.currentFlags = {};
   }
   
   async init() {
@@ -1528,8 +1537,7 @@ class Renderer {
     });
 
     // 2. Align to 16 bytes (WGSL Requirement)
-    const remainder = bytesPerObject % 16;
-    if (remainder !== 0) bytesPerObject += (16 - remainder);
+    bytesPerObject = (bytesPerObject + 15) & ~15;
     const strideFloats = bytesPerObject / 4;
 
     // 3. Handle Empty Arrays: Create 1 dummy object if count is 0
@@ -1561,6 +1569,96 @@ class Renderer {
     });
 
     return { data: data, size: bytesPerObject };
+  }
+
+  packSceneData(includeStatic = true) {
+    const scene = this.scene;
+    
+    // 1. Materials
+    const mats = scene.getMaterials();
+    let hasHeightMaps = false;
+    mats.forEach((m, i) => { m._index = i; if (m.heightTex) hasHeightMaps = true; });
+    const matPack = this.packDataFromSchema(mats, Material.getSchema);
+
+    // 2. Filter Objects
+    const modelObjects = scene.objects.filter(o => o.type === "Model");
+    const primitives = scene.objects.filter(o => ["Sphere","Cube","Cylinder","Torus"].includes(o.type));
+    const inBvhModels = modelObjects.filter(v => v.inSceneBVH);
+    const listModels = modelObjects.filter(v => !v.inSceneBVH);
+    const planes = scene.objects.filter(o => o.type === "Plane");
+    const sceneObjects = primitives.concat(inBvhModels);
+
+    // 4. Static Model Data (BLAS + Triangles)
+    var bvhData = new Float32Array(8), triData = new Float32Array(32);
+    if (includeStatic) {
+      const uniqueModels = [];
+      modelObjects.forEach(obj => { if (!uniqueModels.includes(obj.model)) uniqueModels.push(obj.model); });
+
+      let totalNodes = 0; let totalTriangles = 0;
+      uniqueModels.forEach(m => { 
+        m._node_offset = totalNodes; 
+        m._tri_offset = totalTriangles; 
+        totalNodes += m.nodes.length; 
+        totalTriangles += m.flatTriangles.length; 
+      });
+
+      bvhData = new Float32Array(Math.max(1, totalNodes) * 8);
+      const bvhView = new DataView(bvhData.buffer);
+      triData = new Float32Array(Math.max(1, totalTriangles) * 32);
+
+      uniqueModels.forEach(m => {
+        m.nodes.forEach((node, nIdx) => {
+          const nBase = (m._node_offset + nIdx) * 8;
+          bvhData.set(node.min, nBase); bvhView.setUint32((nBase + 3) * 4, node.num_triangles, true);
+          bvhData.set(node.max, nBase + 4); bvhView.setUint32((nBase + 7) * 4, node.next, true);
+        });
+        m.flatTriangles.forEach((tri, tIdx) => {
+          const tBase = (m._tri_offset + tIdx) * 32;
+          triData.set([...tri.v0, 0], tBase + 0); triData.set([...tri.v1, 0], tBase + 4); triData.set([...tri.v2, 0], tBase + 8);
+          triData.set([...tri.n0, 0], tBase + 12); triData.set([...tri.n1, 0], tBase + 16); triData.set([...tri.n2, 0], tBase + 20);
+          triData.set([...tri.u0, ...tri.u1, ...tri.u2], tBase + 24);
+        });
+      });
+    }
+
+    // 3. BVH & Dynamic Objects
+    if (!this.sceneBvh) {
+      this.sceneBvh = new SceneBVHBuilder(sceneObjects);
+    } else {
+      this.sceneBvh.rebuild(sceneObjects);
+    }
+
+    const objectPack = this.packDataFromSchema(this.sceneBvh.objects, (obj) => {
+      if (!obj) obj = new Sphere({_index:-1},0,0,0,1);
+      return obj.constructor.getSchema(obj);
+    });
+    
+    const tlasData = this.sceneBvh.flatten();
+    const planePack = this.packDataFromSchema(planes, Plane.getSchema);
+    const meshPack = this.packDataFromSchema(listModels, Model.getSchema);
+
+    const result = {
+      mat: matPack,
+      object: objectPack,
+      tlas: { data: tlasData, size: tlasData.byteLength },
+      plane: planePack,
+      mesh: meshPack,
+      bvh: { data: bvhData },
+      triangle: { data: triData },
+      flags: {
+        hasSpheres: primitives.some(o => o.type === "Sphere"),
+        hasCubes: primitives.some(o => o.type === "Cube"),
+        hasCylinders: primitives.some(o => o.type === "Cylinder"),
+        hasTori: primitives.some(o => o.type === "Torus"),
+        hasMeshes: inBvhModels.length > 0,
+        hasListMeshes: listModels.length > 0,
+        hasPlanes: planes.length > 0,
+        hasHeightMaps: hasHeightMaps,
+        hasSkybox: scene.background instanceof HDRTexture
+      }
+    };
+
+    return result;
   }
 
   async setScene(scene) {
@@ -1600,6 +1698,7 @@ class Renderer {
     const skybox = scene.background; // Assuming you have this in your scene object
     const hasSkybox = skybox instanceof HDRTexture;
     if (hasSkybox) {
+      await Promise.resolve(skybox.loaded);
       const skyTex = device.createTexture({ 
         size: [ skybox.width, skybox.height ],
         format: 'rgba16float', 
@@ -1630,88 +1729,11 @@ class Renderer {
 
     console.log("Created Textures");
 
-    // --- 1. EXTRACT & PACK MATERIALS ---
-    const mats = scene.getMaterials();
-    var hasHeightMaps = false;
-    mats.forEach((m, i) => {
-      m._index = i;
-      if (m.heightTex) hasHeightMaps = true;
-    });
-    const { data: matData, size: matSize } = this.packDataFromSchema(mats,Material.getSchema);
+    // Build the data packets
+    this.sceneBvh = null; // Force fresh BVH builder for a new scene
+    const sceneData = this.packSceneData(true);
+    this.currentFlags = sceneData.flags; // Store flags for dynamic compilation checks
 
-    console.log("Created Materials");
-
-    // --- 1. PRE-CALCULATE TOTALS ---
-    const modelObjects = scene.objects.filter(o => o.type === "Model");
-    
-    // Get a list of unique ModelData instances
-    const uniqueModels = [];
-    modelObjects.forEach(obj => {
-      if (!uniqueModels.includes(obj.model)) {
-        uniqueModels.push(obj.model);
-      }
-    });
-
-    let totalNodes = 0;
-    let totalTriangles = 0;
-
-    uniqueModels.forEach(m => {
-      m._node_offset = totalNodes;
-      m._tri_offset = totalTriangles;
-      totalNodes += m.nodes.length;
-      totalTriangles += m.flatTriangles.length;
-    });
-
-    // --- 2. ALLOCATE BUFFERS ---
-    const bvhData = new Float32Array(Math.max(1, totalNodes) * 8);
-    const bvhView = new DataView(bvhData.buffer);
-
-    const triData = new Float32Array(Math.max(1, totalTriangles) * 32);
-
-    // --- 3. FILL SHARED DATA (BVH & Triangles) ---
-    uniqueModels.forEach(m => {
-      // Pack BVH Nodes for this model
-      m.nodes.forEach((node, nIdx) => {
-        const nBase = (m._node_offset + nIdx) * 8;
-        bvhData.set(node.min, nBase);
-        bvhView.setUint32((nBase + 3) * 4, node.num_triangles, true);
-        bvhData.set(node.max, nBase + 4);
-        bvhView.setUint32((nBase + 7) * 4, node.next, true);
-      });
-
-      // Pack Triangles for this model
-      m.flatTriangles.forEach((tri, tIdx) => {
-        const tBase = (m._tri_offset + tIdx) * 32;
-        triData.set([...tri.v0, 0], tBase + 0);
-        triData.set([...tri.v1, 0], tBase + 4);
-        triData.set([...tri.v2, 0], tBase + 8);
-        triData.set([...tri.n0, 0], tBase + 12);
-        triData.set([...tri.n1, 0], tBase + 16);
-        triData.set([...tri.n2, 0], tBase + 20);
-        triData.set([...tri.u0, ...tri.u1, ...tri.u2], tBase + 24);
-      });
-    });
-
-    console.log("Loaded Model Data");
-
-    const hasSpheres = scene.objects.some(o => o.type === "Sphere");
-    const hasCubes = scene.objects.some(o => o.type === "Cube");
-    const hasFrustums = scene.objects.some(o => o.type === "Frustum");
-    const hasTori = scene.objects.some(o => o.type === "Torus");
-    const objects = scene.objects.filter(o => ["Sphere","Cube","Frustum","Torus"].includes(o.type));
-    const models = modelObjects.filter(v=>v.inSceneBVH);
-    const hasMeshes = models.length > 0;
-    const bvh = new SceneBVHBuilder(objects.concat(models));
-    const { data: objectData, size: objectSize } = this.packDataFromSchema(bvh.objects,(obj)=>{
-      if (!obj) obj = new Sphere({_index:-1},0,0,0,1);
-      return obj.constructor.getSchema(obj);
-    });
-    const tlasData = bvh.flatten();
-
-    const planes = scene.objects.filter(o => o.type === "Plane");
-    const hasPlanes = planes.length > 0;
-    const { data: planeData, size: planeSize } = this.packDataFromSchema(planes,Plane.getSchema);
-    
     console.log("Loaded Primitives");
 
     const makeBuf = (data, minSize = 16) => {
@@ -1724,19 +1746,16 @@ class Renderer {
       return b;
     };
 
-    // --- 4. FILL MESH INSTANCES ---
-    const listModels = modelObjects.filter(v=>!v.inSceneBVH);
-    const hasListMeshes = listModels.length > 0;
-    const { data: meshData, size: meshSize } = this.packDataFromSchema(listModels,Model.getSchema);
-
     // --- 5. CREATE THE BUFFERS ---
-    const meshBuffer = makeBuf(meshData, meshSize);
-    const bvhBuffer = makeBuf(bvhData, 32);
-    const triangleBuffer = makeBuf(triData, 128);
-    const matBuffer = makeBuf(matData, matSize);
-    const objectBuffer = makeBuf(objectData, objectSize);
-    const tlasBuffer = makeBuf(tlasData, 32);
-    const planeBuffer = makeBuf(planeData, planeSize);
+    this.buffers = {
+      mesh: makeBuf(sceneData.mesh.data, sceneData.mesh.size),
+      bvh: makeBuf(sceneData.bvh.data, 32), 
+      triangle: makeBuf(sceneData.triangle.data, 128),
+      mat: makeBuf(sceneData.mat.data, sceneData.mat.size), 
+      object: makeBuf(sceneData.object.data, sceneData.object.size), 
+      tlas: makeBuf(sceneData.tlas.data, 32),             
+      plane: makeBuf(sceneData.plane.data, sceneData.plane.size)
+    };
 
     const uBuf = this.uBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const aBuf = device.createBuffer({ size: canvas.width * canvas.height * 16, usage: GPUBufferUsage.STORAGE });
@@ -1761,22 +1780,24 @@ class Renderer {
 
     console.log("Code Compiled");
 
+    const f = sceneData.flags;
+
     const pipe = this.pipe = device.createComputePipeline({ 
       layout: 'auto', 
       compute: { 
         module: shaderModule, 
         entryPoint: 'main',
-        constants: { 
+        constants: {
           0: scene.bounces, 
-          1: hasSpheres ? 1 : 0, 
-          2: hasCubes ? 1 : 0, 
-          3: hasPlanes ? 1 : 0, 
-          4: hasFrustums ? 1 : 0, 
-          5: hasTori ? 1 : 0, 
-          6: hasMeshes ? 1 : 0, 
-          7: hasListMeshes ? 1 : 0, 
-          8: hasHeightMaps ? 1 : 0,
-          9: hasSkybox ? 1 : 0,
+          1: f.hasSpheres ? 1 : 0, 
+          2: f.hasCubes ? 1 : 0, 
+          3: f.hasPlanes ? 1 : 0, 
+          4: f.hasCylinders ? 1 : 0, 
+          5: f.hasTori ? 1 : 0, 
+          6: f.hasMeshes ? 1 : 0, 
+          7: f.hasListMeshes ? 1 : 0, 
+          8: f.hasHeightMaps ? 1 : 0,
+          9: f.hasSkybox ? 1 : 0,
         }
       } 
     });
@@ -1794,14 +1815,14 @@ class Renderer {
       entries: [
         { binding: 0, resource: { buffer: uBuf } }, 
         { binding: 1, resource: { buffer: aBuf } },
-        { binding: 2, resource: tex.createView() }, 
-        { binding: 3, resource: { buffer: matBuffer } },
-        { binding: 4, resource: { buffer: objectBuffer } }, 
-        { binding: 5, resource: { buffer: tlasBuffer } },
-        { binding: 6, resource: { buffer: meshBuffer } },
-        { binding: 7, resource: { buffer: bvhBuffer } },
-        { binding: 8, resource: { buffer: triangleBuffer } },
-        { binding: 9, resource: { buffer: planeBuffer } },
+        { binding: 2, resource: tex.createView() },
+        { binding: 3, resource: { buffer: this.buffers.mat } },
+        { binding: 4, resource: { buffer: this.buffers.object } }, 
+        { binding: 5, resource: { buffer: this.buffers.tlas } },
+        { binding: 6, resource: { buffer: this.buffers.mesh } },
+        { binding: 7, resource: { buffer: this.buffers.bvh } },
+        { binding: 8, resource: { buffer: this.buffers.triangle } },
+        { binding: 9, resource: { buffer: this.buffers.plane } },
         // Expanded Texture Bindings
         ...gpuTextures.map((t, i) => ({ binding: 10 + i, resource: t.createView() })),
         { binding: 18, resource: sampler },
@@ -1813,8 +1834,42 @@ class Renderer {
 
     console.log("Bindings Created");
 
-    this.frame = 0;
+    this.reset();
     console.log("Scene loaded!");
+  }
+
+  async updateObjects() {
+    if (!this.scene || !this.sceneBvh || !this.buffers) return;
+    const { device, buffers } = this;
+
+    // Fetch new dynamic data
+    const sceneData = this.packSceneData(false);
+
+    // 1. Check if Shader Re-compilation is required
+    const flagsMatch = Object.keys(sceneData.flags).every(k => sceneData.flags[k] === this.currentFlags[k]);
+
+    // 2. Verify GPU buffers can fit the new data
+    const fitsBuffer = 
+        sceneData.object.data.byteLength <= buffers.object.size && 
+        sceneData.tlas.data.byteLength <= buffers.tlas.size &&
+        sceneData.plane.data.byteLength <= buffers.plane.size &&
+        sceneData.mesh.data.byteLength <= buffers.mesh.size &&
+        sceneData.mat.data.byteLength <= buffers.mat.size;
+    
+    if (flagsMatch && fitsBuffer) {
+      // FAST PATH: Upload modifications sequentially
+      if (sceneData.object.data.byteLength > 0) device.queue.writeBuffer(buffers.object, 0, sceneData.object.data);
+      if (sceneData.tlas.data.byteLength > 0) device.queue.writeBuffer(buffers.tlas, 0, sceneData.tlas.data);
+      if (sceneData.plane.data.byteLength > 0) device.queue.writeBuffer(buffers.plane, 0, sceneData.plane.data);
+      if (sceneData.mesh.data.byteLength > 0) device.queue.writeBuffer(buffers.mesh, 0, sceneData.mesh.data);
+      if (sceneData.mat.data.byteLength > 0) device.queue.writeBuffer(buffers.mat, 0, sceneData.mat.data); // Upload materials instantly too!
+      
+      //this.clear(); // Clear accumulation instantly
+    } else {
+      // SLOW PATH: Buffer capacities exceeded or new primitive introduced
+      console.warn("Buffer capacity or Pipeline constants changed. Executing full scene rebuild.");
+      await this.setScene(this.scene);
+    }
   }
 
   updateUniforms() {
@@ -1856,14 +1911,18 @@ class Renderer {
     this.frame++;
   }
 
-  clear() {
+  reset() {
     this.frame = 0;
+  }
+
+  clear() {
+    this.reset();
     const { canvas, context, device} = this;
     const canvasTexture = context.getCurrentTexture();
     const renderPassDescriptor = {
       colorAttachments: [{
         view: canvasTexture.createView(),
-        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }, // The clear color (dark blue in this case)
+        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }, // The clear color (transparent in this case)
         loadOp: 'clear',
         storeOp: 'store',
       }],
@@ -1876,8 +1935,6 @@ class Renderer {
     console.log("Cleared!");
   }
 }
-
-
 
 const MathUtils = {
   getRay(x, y, canvas, proj, view) {
