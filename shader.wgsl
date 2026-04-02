@@ -14,8 +14,11 @@ struct Ray {
   direction: vec3f
 };
 struct SceneParams {
-  frame_count: u32, width: u32, height: u32, exposure: f32,
-  eye: vec4f, ray00: vec4f, ray10: vec4f, ray01: vec4f, ray11: vec4f 
+  eye: vec3f, sample_number: u32, 
+  ray00: vec3f, width: u32, 
+  ray10: vec3f, height: u32, 
+  ray01: vec3f, exposure: f32,
+  ray11: vec3f, seed: u32,
 };
 
 struct Material { 
@@ -125,7 +128,8 @@ fn rand_pcg() -> f32 {
   rng_state = state * 747796405u + 2891336453u;
   var word: u32 = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
   word = (word >> 22u) ^ word;
-  return f32(word) / 4294967296.0;
+  //return f32(word) / 4294967296.0;
+  return f32(word) * 2.3283064365386963e-10;
 }
 
 fn random_unit_vector() -> vec3f {
@@ -727,7 +731,6 @@ fn calculate_pom(initial_uv: vec2f, view_dir_ts: vec3f, start_depth: f32, mat: M
   return res;
 }
 
-
 fn calculate_shadow_pom(current_uv: vec2f, current_height: f32, light_dir_ts: vec3f, mat: Material, height_idx: i32) -> PomResult {
   var res: PomResult;
   res.hit = false;
@@ -877,12 +880,14 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= params.width || id.y >= params.height) { return; }
   let idx = id.y * params.width + id.x;
   
-  rng_state = idx + params.frame_count * 912373u;
+  //rng_state = idx + params.sample_number * 912373u;
+  rng_state = (idx * 1973u + params.sample_number * 9277u + params.seed * 26699u) | 1u;
+  //rng_state = (idx ^ (params.sample_number * 912373u) ^ (params.seed * 26699u)) | 1u;
   rand_pcg();
 
   let screen_uv = (vec2f(id.xy) + vec2f(rand_pcg(), rand_pcg())) / vec2f(f32(params.width), f32(params.height));
-  let ray_dir = normalize(mix(mix(params.ray00.xyz, params.ray10.xyz, screen_uv.x), mix(params.ray01.xyz, params.ray11.xyz, screen_uv.x), 1.-screen_uv.y));
-  var ray = Ray(params.eye.xyz, ray_dir);
+  let ray_dir = normalize(mix(mix(params.ray00, params.ray10, screen_uv.x), mix(params.ray01, params.ray11, screen_uv.x), 1.-screen_uv.y));
+  var ray = Ray(params.eye, ray_dir);
 
   //var hit = trace_scene(ray);
   //textureStore(output_tex, id.xy, vec4f(vec3f(1.-log(log(hit.t)+1.)), 1.0));
@@ -1076,7 +1081,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     throughput /= survival_prob;
   }
 
-  let weight = 1.0 / f32(params.frame_count + 1u);
+  let weight = 1.0 / f32(params.sample_number + 1u);
   let old_c = accum_buffer[idx].rgb;
   var final_c = mix(old_c, radiance, weight);
   accum_buffer[idx] = vec4f(final_c, 1.0);
