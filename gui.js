@@ -1641,7 +1641,7 @@ document.getElementById('render-w').onchange = (e) => {
   var cam = State.scene.camera;
   cam.aspect = canvas.width / canvas.height;
   cam.updateRays(); 
-  if (renderer) renderer.reset();
+  if (renderer) renderer.resize();
 };
 document.getElementById('render-h').onchange = (e) => {
   //if (renderActive) return;
@@ -1650,5 +1650,5 @@ document.getElementById('render-h').onchange = (e) => {
   var cam = State.scene.camera;
   cam.aspect = canvas.width / canvas.height;
   cam.updateRays(); 
-  if (renderer) renderer.reset();
+  if (renderer) renderer.resize();
 };
