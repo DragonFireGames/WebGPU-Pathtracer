@@ -133,7 +133,12 @@ class Material {
     this.heightSamp = options.heightSamp !== undefined ? options.heightSamp : 32;
     this.heightOffset = options.heightOffset || 0.0;
     this.ior = options.ior || 1.5;
-    this.concentration = options.concentration || 1;
+    this.concentration = options.concentration !== undefined ? options.concentration : 1;
+
+    // Physics
+    this.density = options.density || 5;
+    this.friction = options.friction !== undefined ? options.friction : 0.5;
+    this.restitution = options.restitution !== undefined ? options.restitution : 0.3; // Bounciness
   }
 }
 Material.getSchema = function(m) {
@@ -190,8 +195,10 @@ class Primitive {
 
     this.material = material;
     this.position = vec3.create();
+    this.velocity = vec3.create();
     this.scale = vec3.fromValues(1, 1, 1);
     this.rotation = quat.create(); 
+    this.angularVelocity = vec3.create();
     this.matrix = mat4.create();
     this.invMatrix = mat4.create();
 
