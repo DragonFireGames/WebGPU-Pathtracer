@@ -369,6 +369,14 @@ var SceneList = [
         }
       }
 
+      var heavyMat = new Material("Heavy",0,[0.8,0.8,0.8],1,[0,0,0],{
+        density: 50,
+      });
+      var heavyBall = scene.newSphere("Heavy Ball",heavyMat,0,1,-11,1);
+      heavyBall.velocity[2] = 10;
+      heavyBall.angularVelocity[0] = 10;
+
+
       //scene.newModel(matGround,diamondModel,true);
 
       scene.bounces = 6;
@@ -514,8 +522,11 @@ async function loadScene() {
   renderList();
   renderInspector();
   renderAssets();
+  //
 	AnimationPanel.reset();
   AnimationPanel.updateUI();
+  AnimationPanel.render();
+  AnimationPanel.updateSeeker();
 }
 
 /*var renderer;
