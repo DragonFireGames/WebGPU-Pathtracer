@@ -1497,42 +1497,52 @@ async function startSimulation(fps,spp,dur,psps) {
 
   var physics = new PhysicsController(State.scene);
   var motionblur = true;
-
-  const dt = 1 / psps; 
-  let accumulatedTime = 0;
-  
-  RecordVideo((time)=>{
+  const dt = 1 / psps;
+  RecordVideo((time,counter)=>{
     if (time == 0) return;
     if (motionblur) {
-      while (accumulatedTime < time) {
-        physics.update(dt);
-        accumulatedTime += dt;
-      }
+      physics.setTime(time,dt);
     } else {
-      if (t % 1 != 0) return;
-      physics.update(1/fps);
+      if (counter % spp !== 0) return;
+      physics.setTime(time,dt);
     }
     return true;
   },fps,spp,dur,()=>{
     physics.reset();
   });
 }
-function simulate(dur,psps) {
+function simulate(dur,psps,animate,areset) {
+  animate = confirm("Add to animator?");
+  areset = animate && confirm("Reset the animator?");
   dur = Number(prompt("Enter duration:","1")||1);
   psps = Number(prompt("Enter physics steps per second:","120")||120);
+
   var physics = new PhysicsController(State.scene);
   const dt = 1 / psps;
   var time = 0;
+  var startingTime = AnimationPanel.currentTime;
+  if (areset) {
+    startingTime = 0;
+    for (var body of physics.bodies) AnimationPanel.removeItem(body.renderer.id,true);
+  }
   var interval = setInterval(()=>{
-    physics.update(dt);
+    physics.setTime(time,dt);
     time += dt;
+    if (animate) {
+      AnimationPanel.currentTime = startingTime+time;
+      for (var body of physics.bodies) AnimationPanel.insertKeyframe(body.renderer.id,true);
+    }
     if (time > dur) {
       physics.reset();
       clearInterval(interval);
+      if (animate) {
+        AnimationPanel.render();
+        AnimationPanel.updateSeeker();
+        AnimationPanel.updateUI();
+      }
     }
   },1000*dt);
 }
-
 async function RecordVideo(animate,fps,samples,duration,callback) {
   const canvas = document.getElementById('gpuCanvas');
   const status = document.getElementById('render-stats');
@@ -1566,7 +1576,7 @@ async function RecordVideo(animate,fps,samples,duration,callback) {
     if (encoder._stop) renderActive = null;
     counter++;
     var time = counter / fps / samples;
-    if (animate(time)) await renderer.updateObjects();
+    if (animate(time,counter)) await renderer.updateObjects();
     if (counter % samples == 0) {
       status.innerText = "Status: Rendered Frame "+Math.floor(counter/samples)+"/"+frames;
       var data = canvas.toDataURL('image/webp', 0.95);
