@@ -4,7 +4,7 @@ const AnimationPanel = {
   keyframes: new Map(), // Map of node id -> array of {time, position, rotation, scale}
   isPlaying: false,
   currentTime: 0, // in seconds
-  duration: 60, // 1:00
+  duration: 10, // 10
   lastFrameTime: 0,
   animationFrameId: null,
 
@@ -13,34 +13,34 @@ const AnimationPanel = {
     this.keyframes = new Map();
     this.isPlaying = false;
     this.currentTime = 0;
-    this.duration = 60;
+    this.duration = 10;
     this.lastFrameTime = 0;
     this.animationFrameId = null;
   },
 
-  addItem(nodeId, nodeName) {
+  addItem(nodeId, nodeName, noRender) {
     if (!this.items.has(nodeId)) {
       this.items.set(nodeId, nodeName);
       this.keyframes.set(nodeId, []);
-      this.render();
-      this.updateSeeker();
+      if (!noRender) this.render();
+      if (!noRender) this.updateSeeker();
     }
   },
 
-  removeItem(nodeId) {
+  removeItem(nodeId, noRender) {
     this.items.delete(nodeId);
     this.keyframes.delete(nodeId);
-    this.render();
-    this.updateSeeker();
+    if (!noRender) this.render();
+    if (!noRender) this.updateSeeker();
   },
 
-  insertKeyframe(nodeId) {
+  insertKeyframe(nodeId, noRender) {
     const node = State.nodes.find((n) => n.id === nodeId);
     if (!node) return;
 
     // Add item to animation if it doesn't exist
     if (!this.items.has(nodeId)) {
-      this.addItem(nodeId, node.name);
+      this.addItem(nodeId, node.name, noRender);
     }
 
     const keyframes = this.keyframes.get(nodeId) || [];
@@ -54,7 +54,7 @@ const AnimationPanel = {
 
     // Remove existing keyframe at this time if it exists
     const existingIndex = keyframes.findIndex(
-      (k) => Math.abs(k.time - this.currentTime) < 0.01,
+      (k) => Math.abs(k.time - this.currentTime) < 0.0001,
     );
     if (existingIndex !== -1) {
       keyframes[existingIndex] = newKeyframe;
@@ -64,7 +64,7 @@ const AnimationPanel = {
     }
 
     this.keyframes.set(nodeId, keyframes);
-    this.render();
+    if (!noRender) this.render();
   },
 
   removeKeyframe(nodeId, time) {
@@ -111,11 +111,15 @@ const AnimationPanel = {
     this.animationFrameId = requestAnimationFrame(animate);
   },
 
+  getTimeStr(time) {
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return minutes+":"+seconds.toString().padStart(2, "0");
+  },
+
   updateUI() {
     // Update time display
-    const minutes = Math.floor(this.currentTime / 60);
-    const seconds = Math.floor(this.currentTime % 60);
-    const display = `${minutes}:${seconds.toString().padStart(2, "0")} / 1:00`;
+    const display = this.getTimeStr(this.currentTime)+" / "+this.getTimeStr(this.duration);
     document.getElementById("animation-time").textContent = display;
 
     // Update seeker position
@@ -502,15 +506,20 @@ class ConvexCollider {
 
 class PhysicsController {
   constructor(scene) {
+    this.bodies = [];
+    this.currentTime = 0;
+    this.setScene(scene);
+  }
+  setScene(scene) {
     const objects = scene.objects;
     const materials = scene.getMaterials();
 
     var world = this.world = new CANNON.World();
     world.gravity.set(0, -9.82, 0);
     world.solver.iterations = 20;
-    world.defaultContactMaterial.contactEquationStiffness = 1e10;
+    world.defaultContactMaterial.contactEquationStiffness = 1e8;
     world.defaultContactMaterial.contactEquationRelaxation = 10;
-    world.defaultContactMaterial.frictionEquationStiffness = 1e5; 
+    world.defaultContactMaterial.frictionEquationStiffness = 1e5;
     world.defaultContactMaterial.frictionEquationRelaxation = 3;
 
     this.materialMap = new Map();
@@ -522,14 +531,10 @@ class PhysicsController {
     // 2. Define how every material interacts with every other material
     for (let matA of materials) {
       for (let matB of materials) {
-        const contact = new CANNON.ContactMaterial(
-          matA.cannonMaterial, 
-          matB.cannonMaterial, 
-          {
-            friction: Math.sqrt(matA.friction * matB.friction),
-            restitution: Math.sqrt(matA.restitution * matB.restitution),
-          }
-        );
+        const contact = new CANNON.ContactMaterial(matA.cannonMaterial, matB.cannonMaterial, {
+          friction: Math.sqrt(matA.friction * matB.friction),
+          restitution: Math.sqrt(matA.restitution * matB.restitution),
+        });
         world.addContactMaterial(contact);
       }
     }
@@ -541,7 +546,7 @@ class PhysicsController {
       var pos = {x:obj.position[0],y:obj.position[1],z:obj.position[2]};
       var quat = {x:obj.rotation[0],y:obj.rotation[1],z:obj.rotation[2],w:obj.rotation[3]};
       var scale = {x:obj.scale[0],y:obj.scale[1],z:obj.scale[2]};
-      var localOffset = new CANNON.Vec3(0, 0, 0); 
+      var localOffset = new CANNON.Vec3(0, 0, 0);
 
       var body;
       var density = obj.material.density;
@@ -583,7 +588,7 @@ class PhysicsController {
         shape = new CANNON.Cylinder(radiusTop, radiusBottom, height, 24);
         localOffset.set(0, yComFromBottom, 0);
 
-        body = new CANNON.Body({ 
+        body = new CANNON.Body({
           mass: volume * density,
         });
         body.addShape(shape, new CANNON.Vec3(0, (height / 2) - yComFromBottom, 0));
@@ -598,7 +603,6 @@ class PhysicsController {
         body = new CANNON.Body({
           mass: volume * density
         });
-
 
         var generateWedgeFaces = function(segments) {
           const faces = [];
@@ -623,24 +627,24 @@ class PhysicsController {
         for (let i = 0; i < majorSegments; i++) {
           const theta1 = (i / majorSegments) * Math.PI * 2;
           const theta2 = ((i + 1) / majorSegments) * Math.PI * 2;
-          
+        
           const vertices = [];
           // For each wedge, we take two "slices" of the tube and connect them
           [theta1, theta2].forEach(theta => {
             for (let j = 0; j < tubeSegments; j++) {
               const phi = (j / tubeSegments) * Math.PI * 2;
-              
+            
               // Torus parametric equations
               const x = (majorRadius + tubeRadius * Math.cos(phi)) * Math.cos(theta);
               const y = tubeRadius * Math.sin(phi);
               const z = (majorRadius + tubeRadius * Math.cos(phi)) * Math.sin(theta);
-              
+            
               vertices.push(new CANNON.Vec3(x, y, z));
             }
           });
 
           // Use Cannon's helper to create a convex hull from these points
-          // Note: For complex shapes, you'd define faces, but for a small 
+          // Note: For complex shapes, you'd define faces, but for a small
           // number of points, some Cannon versions can auto-generate the hull.
           // If your version requires faces, use the logic below:
           const shape = new CANNON.ConvexPolyhedron({
@@ -656,7 +660,7 @@ class PhysicsController {
       } else if (obj.type == "Model" && obj.collider instanceof ConvexCollider) {
         // 1. Deep clone the hulls so we don't permanently mutate the shared asset
         const clonedHulls = JSON.parse(JSON.stringify(obj.collider.hulls));
-        
+      
         // 2. Apply Scale using a temporary ConvexCollider instance and glMatrix
         const tempCollider = new ConvexCollider();
         tempCollider.hulls = clonedHulls;
@@ -684,7 +688,7 @@ class PhysicsController {
           }
 
           // Assuming computeHullVolume is still available in your scope
-          const V = tempCollider.computeHullVolume(verts, faces); 
+          const V = tempCollider.computeHullVolume(verts, faces);
           totalVolume += V;
 
           let centroid = new CANNON.Vec3(0, 0, 0);
@@ -752,42 +756,70 @@ class PhysicsController {
 
       this.bodies.push(body);
     }
-  }
-  update(deltaTime) {
-    this.world.step(deltaTime);
-    for (var i = 0; i < this.bodies.length; i++) {
-      var body = this.bodies[i];
-      if (body.mass == 0) continue;
+
+    this.bodies = this.bodies.filter(body=>{
+      if (body.mass == 0) return false;
       var obj = body.renderer;
-      if (obj.type == "Plane") continue;
-      //var T = Wugl.composeTransform3D(body.position, body.quaternion, body.scale); 
-      //if (body.offset) T = T.multiply(Transform.Translation([ -body.offset.x, -body.offset.y, -body.offset.z ])); 
-      //obj.setTransform(T);
-      const actualPos = new CANNON.Vec3();
-      if (body.shapeOffset) {
-        body.quaternion.vmult(body.shapeOffset, actualPos);
-        actualPos.set(body.position.x - actualPos.x, body.position.y - actualPos.y, body.position.z - actualPos.z);
-      } else {
-        actualPos.copy(body.position);
-      }
-      obj.position = [actualPos.x, actualPos.y, actualPos.z];
-      obj.rotation = [body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w];
+      if (obj.type == "Plane") return false;
+      return true;
+    });
+
+    for (var body of this.bodies) {
+      body.currentState = this.getPosQuat(body);
+      body.previousState = body.currentState;
+    }
+
+    this.accumulatedTime = 0;
+  }
+  getPosQuat(body) {
+    const actualPos = new CANNON.Vec3();
+    if (body.shapeOffset) {
+      body.quaternion.vmult(body.shapeOffset, actualPos);
+      actualPos.set(body.position.x - actualPos.x, body.position.y - actualPos.y, body.position.z - actualPos.z);
+    } else {
+      actualPos.copy(body.position);
+    }
+    return {
+      pos: [actualPos.x, actualPos.y, actualPos.z],
+      quat: [body.quaternion.x,body.quaternion.y,body.quaternion.z,body.quaternion.w],
+    };
+  }
+  stepPhysics(dt) {
+    for (var body of this.bodies) {
+      body.previousState = body.currentState;
+    }
+    this.world.step(dt);
+    for (var body of this.bodies) {
+      body.currentState = this.getPosQuat(body);
+    }
+    this.accumulatedTime += dt;
+  }
+  setTime(time,dt) {
+    while (this.accumulatedTime < time) {
+      this.stepPhysics(dt);
+    }
+    const startTime = this.accumulatedTime - dt;
+    let alpha = (time - startTime) / dt;
+    alpha = Math.max(0, Math.min(1, alpha));
+    for (let body of this.bodies) {
+      const obj = body.renderer;
+      const prev = body.previousState;
+      const current = body.currentState;
+
+      vec3.lerp(obj.position, prev.pos, current.pos, alpha);
+      quat.slerp(obj.rotation, prev.quat, current.quat, alpha);
       obj.updateMatrix();
     }
   }
   reset() {
     for (var i = 0; i < this.bodies.length; i++) {
       var body = this.bodies[i];
-      if (body.mass == 0) continue;
       var obj = body.renderer;
-      if (obj.type == "Plane") continue;
-      //var T = Wugl.composeTransform3D(body.position, body.quaternion, body.scale); 
-      //if (body.offset) T = T.multiply(Transform.Translation([ -body.offset.x, -body.offset.y, -body.offset.z ])); 
-      //obj.setTransform(T);
       var ot = body.initialTransform;
       obj.position = [ot.pos.x,ot.pos.y,ot.pos.z];
       obj.rotation = [ot.quat.x,ot.quat.y,ot.quat.z,ot.quat.w];
       obj.updateMatrix();
     }
+    // note: does not reset physics sim, recommended to just make a new one
   }
 }
