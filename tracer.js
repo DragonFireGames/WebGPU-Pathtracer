@@ -1548,14 +1548,37 @@ class Renderer {
     this.currentFlags = {};
   }
   
+  
   async init() {
     const { context } = this;
     const adapter = await navigator.gpu.requestAdapter();
     const limits = this.limits = adapter.limits;
     console.log(`Your GPU supports up to ${limits.maxStorageBuffersPerShaderStage} storage buffers.`);
     console.log(`Your GPU supports up to ${limits.maxStorageBufferBindingSize} binding size.`);
+    var required = [
+      'maxBufferSize',
+      'maxStorageBuffersPerShaderStage',
+      'maxComputeWorkgroupStorageSize',
+      'maxDynamicStorageBuffersPerPipelineLayout',
+      'maxDynamicUniformBuffersPerPipelineLayout',
+      'maxInterStageShaderVariables',
+      'maxSampledTexturesPerShaderStage',
+      'maxSamplersPerShaderStage',
+      'maxStorageBufferBindingSize',
+      'maxStorageBuffersPerShaderStage',
+      'maxStorageTexturesPerShaderStage',
+      'maxTextureArrayLayers',
+      'maxTextureDimension1D',
+      'maxTextureDimension2D',
+      'maxTextureDimension3D',
+      'maxUniformBufferBindingSize',
+      'maxUniformBuffersPerShaderStage',
+      'maxVertexAttributes'
+    ];
+    var requiredLimits = {};
+    for (var i of required) requiredLimits[i] = limits[i];
     this.device = await adapter.requestDevice({
-      requiredLimits:limits // get the best
+      requiredLimits // get the best
     });
     context.configure({ 
       device: this.device, 
