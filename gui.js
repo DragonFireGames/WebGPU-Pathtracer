@@ -1253,35 +1253,104 @@ window.createMaterial = (color) => {
   State.assets.push(mat); renderAssets(); selectAsset(mat);
   return mat;
 };
-class GLBLoader {
-  async load(url) {
+
+class GLTFLoader {
+  constructor() {
+    this.textureCache = new Map();
+    this.assetMap = new Map();
+    this.basePath = ""; // New property
+  }
+
+  async loadFromAssets(json, assetMap = new Map(), basePath = "") {
+    this.assetMap = assetMap;
+    this.basePath = basePath; // Store the directory prefix
+    return this.parse(json, null);
+  }
+
+  // Helper to resolve URI to a Blob URL from the Map
+  resolveUri(uri) {
+    if (!uri) return null;
+    if (uri.startsWith('data:')) return uri;
+    if (this.assetMap.has(uri)) return this.assetMap.get(uri);
+    const relativePath = this.basePath + uri;
+    if (this.assetMap.has(relativePath)) return this.assetMap.get(relativePath);
+    return uri;
+  }
+
+  // Entry point for .glb files
+  async loadGLB(url, assetMap = new Map(), basePath = "") {
+    this.assetMap = assetMap;
+    this.basePath = basePath;
+
     const response = await fetch(url);
     const arrayBuffer = await response.arrayBuffer();
-    
-    // Validate GLB Header
     const dataView = new DataView(arrayBuffer);
-    const magic = dataView.getUint32(0, true);
-    if (magic !== 0x46546c67) throw new Error("Not a valid GLB file.");
+    
+    if (dataView.getUint32(0, true) !== 0x46546c67) throw new Error("Not a GLB");
 
     const jsonLen = dataView.getUint32(12, true);
     const jsonContent = new TextDecoder().decode(new Uint8Array(arrayBuffer, 20, jsonLen));
     const json = JSON.parse(jsonContent);
 
-    const binChunkOffset = 20 + jsonLen + 8;
-    const binaryData = arrayBuffer.slice(binChunkOffset);
+    const binOffset = 20 + jsonLen + 8;
+    const binaryData = arrayBuffer.slice(binOffset);
 
-    // 1. Process Materials first
-    this.textureCache = new Map();
-    const materials = (json.materials || []).map(m => this.createMaterial(m, json, binaryData));
+    return this.parse(json, binaryData);
+  }
 
-    // 2. Build Global World Matrices (Recursive)
+  // Entry point for extracted ZIP contents
+  async loadFromAssets(json, assetMap, basePath = "") {
+    this.assetMap = assetMap;
+    this.basePath = basePath; // Store the directory prefix
+    return this.parse(json, null);
+  }
+
+  async parse(json, internalBinary) {
+    // 1. Process Materials
+    const materials = (json.materials || []).map(m => this.createMaterial(m, json, internalBinary));
+
+    // 2. Build Global World Matrices
+    const worldMatrices = this.computeAllWorldMatrices(json);
+
+    // 3. Instantiate Models
+    const meshCache = new Map();
+    const instances = [];
+
+    for (let nodeIdx = 0; nodeIdx < json.nodes.length; nodeIdx++) {
+      const node = json.nodes[nodeIdx];
+      if (node.mesh === undefined) continue;
+
+      if (!meshCache.has(node.mesh)) {
+        meshCache.set(node.mesh, await this.processMesh(json.meshes[node.mesh], json, internalBinary));
+      }
+
+      const cachedPrimitives = meshCache.get(node.mesh);
+      cachedPrimitives.forEach((modelData, primIdx) => {
+        const primitive = json.meshes[node.mesh].primitives[primIdx];
+        const mat = primitive.material !== undefined ? materials[primitive.material] : new Material("Default");
+        const modelInstance = new Model(`${node.name || 'Node'}_${primIdx}`, mat, modelData);
+        
+        mat4.invert(modelInstance.invMatrix, worldMatrices[nodeIdx]);
+        instances.push(modelInstance);
+      });
+    }
+
+    this.normalizeScene(instances);
+
+    const assets = this.collectAssets(instances, materials);
+    for (const t of assets.texs) await t.loaded;
+
+    return { nodes: instances, ...assets };
+  }
+
+  computeAllWorldMatrices(json) {
     const worldMatrices = new Array(json.nodes.length).fill(null);
-    const computeWorldMatrix = (nodeIdx, parentMatrix) => {
+    const compute = (nodeIdx, parentMatrix) => {
       const node = json.nodes[nodeIdx];
       let localMatrix = mat4.create();
 
       if (node.matrix) {
-        localMatrix = mat4.clone(node.matrix);
+        mat4.copy(localMatrix, node.matrix);
       } else {
         const t = node.translation || [0, 0, 0];
         const r = node.rotation || [0, 0, 0, 1];
@@ -1294,113 +1363,126 @@ class GLBLoader {
       else mat4.copy(worldMatrix, localMatrix);
       
       worldMatrices[nodeIdx] = worldMatrix;
-
       if (node.children) {
-        for (const childIdx of node.children) computeWorldMatrix(childIdx, worldMatrix);
+        for (const childIdx of node.children) compute(childIdx, worldMatrix);
       }
     };
 
-    // Initialize matrix computation from scene roots
     const sceneIdx = json.scene || 0;
-    for (const nodeIdx of json.scenes[sceneIdx].nodes) {
-      computeWorldMatrix(nodeIdx, null);
-    }
-
-    // 3. Instantiate Models
-    // --- NEW: Mesh Data Cache ---
-    // This stores ModelData objects indexed by their glTF mesh index
-    const meshCache = new Map(); 
-
-    // 3. Instantiate Models
-    const instances = [];
-    json.nodes.forEach((node, nodeIdx) => {
-      if (node.mesh === undefined) return;
-
-      const meshIdx = node.mesh;
-      const meshMetadata = json.meshes[meshIdx];
-      
-      // Check if we've already processed this mesh geometry
-      if (!meshCache.has(meshIdx)) {
-        const primitiveModels = [];
-        
-        meshMetadata.primitives.forEach((primitive, primIdx) => {
-          const modelData = new ModelData(`${meshMetadata.name || 'Mesh'}_${meshIdx}_${primIdx}`);
-          this.fillModelData(modelData, primitive, json, binaryData);
-          
-          // Build BVH only ONCE per unique mesh primitive
-          modelData.generateBVH();
-          primitiveModels.push(modelData);
-        });
-        
-        meshCache.set(meshIdx, primitiveModels);
-      }
-
-      // Get the cached ModelData for this node
-      const cachedPrimitives = meshCache.get(meshIdx);
-
-      // Create a new Model instance for each primitive, but sharing the ModelData
-      cachedPrimitives.forEach((modelData, primIdx) => {
-        const primitive = meshMetadata.primitives[primIdx];
-        const mat = primitive.material !== undefined ? materials[primitive.material] : new Material("Default");
-        
-        // This is a NEW instance (new transform) but it uses OLD geometry (cached BVH)
-        const modelInstance = new Model(`${node.name || 'Node'}_${primIdx}`, mat, modelData);
-
-        // Apply calculated World Matrix
-        const worldM = worldMatrices[nodeIdx];
-        mat4.invert(modelInstance.invMatrix, worldM);
-
-        instances.push(modelInstance);
-      });
-    });
-
-    var mats = [];
-    for (var i = 0; i < instances.length; i++) {
-      var m = instances[i].material;
-      if (m && !mats.includes(m)) mats.push(m);
-    }
-    var texs = [];
-    for (var i = 0; i < mats.length; i++) {
-      ['emissiveTex', 'albedoTex', 'normalTex', 'heightTex', 'roughnessTex', 'metallicTex'].forEach(t => {
-        t = mats[i][t];
-        if (t && !texs.includes(t)) texs.push(t);
-      });
-    }
-    for (var i = 0; i < texs.length; i++) await texs[i].loaded;
-    var models = [];
-    for (var i = 0; i < instances.length; i++) {
-      var m = instances[i].model;
-      if (m && !models.includes(m)) models.push(m);
-    }
-
-    return { nodes: instances, models, mats, texs };
+    const sceneNodes = json.scenes[sceneIdx].nodes;
+    for (const nodeIdx of sceneNodes) compute(nodeIdx, null);
+    
+    return worldMatrices;
   }
 
-  fillModelData(modelData, primitive, json, bin) {
-    const getBuffer = (accessorIdx) => {
-      if (accessorIdx === undefined) return null;
-      const acc = json.accessors[accessorIdx];
-      const view = json.bufferViews[acc.bufferView];
-      const offset = (view.byteOffset || 0) + (acc.byteOffset || 0);
+  async processMesh(meshMetadata, json, internalBinary) {
+    const primitiveModels = [];
+    for (const primitive of meshMetadata.primitives) {
+      const modelData = new ModelData(meshMetadata.name || "Mesh");
       
-      // Map component types
-      if (acc.componentType === 5126) return new Float32Array(bin, offset, acc.count * (acc.type === 'VEC3' ? 3 : acc.type === 'VEC2' ? 2 : 1));
-      if (acc.componentType === 5123) return new Uint16Array(bin, offset, acc.count);
-      if (acc.componentType === 5125) return new Uint32Array(bin, offset, acc.count);
-      return null;
-    };
+      modelData.vertex_positions = await this.getBufferData(primitive.attributes.POSITION, json, internalBinary);
+      const normals = await this.getBufferData(primitive.attributes.NORMAL, json, internalBinary);
+      const uvs = await this.getBufferData(primitive.attributes.TEXCOORD_0, json, internalBinary);
+      const indices = await this.getBufferData(primitive.indices, json, internalBinary);
 
-    modelData.vertex_positions = new Float32Array(getBuffer(primitive.attributes.POSITION));
-    const normals = getBuffer(primitive.attributes.NORMAL);
-    const uvs = getBuffer(primitive.attributes.TEXCOORD_0);
-    const indices = getBuffer(primitive.indices);
+      if (normals) modelData.vertex_normals = new Float32Array(normals);
+      if (uvs) modelData.vertex_texcoords = new Float32Array(uvs);
+      
+      modelData.index_positions = indices instanceof Uint16Array ? new Uint32Array(indices) : indices;
+      modelData.index_normals = new Uint32Array(modelData.index_positions);
+      modelData.index_texcoords = new Uint32Array(modelData.index_positions);
 
-    if (normals) modelData.vertex_normals = new Float32Array(normals);
-    if (uvs) modelData.vertex_texcoords = new Float32Array(uvs);
+      modelData.generateBVH();
+      primitiveModels.push(modelData);
+    }
+    return primitiveModels;
+  }
+
+  normalizeScene(instances) {
+    if (instances.length === 0) return;
+
+    let min = [Infinity, Infinity, Infinity];
+    let max = [-Infinity, -Infinity, -Infinity];
+
+    // 1. Calculate Global Bounding Box
+    instances.forEach(inst => {
+      const positions = inst.model.vertex_positions;
+      const worldMat = mat4.create();
+      mat4.invert(worldMat, inst.invMatrix); // Get world matrix back from inverse
+
+      for (let i = 0; i < positions.length; i += 3) {
+        const v = vec3.fromValues(positions[i], positions[i+1], positions[i+2]);
+        vec3.transformMat4(v, v, worldMat);
+
+        for (let j = 0; j < 3; j++) {
+          min[j] = Math.min(min[j], v[j]);
+          max[j] = Math.max(max[j], v[j]);
+        }
+      }
+    });
+
+    // 2. Calculate Scale
+    const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    const maxDim = Math.max(size[0], size[1], size[2]);
+    const scaleFactor = Math.min(Math.max(maxDim,0.5),50) / maxDim;
+
+    // 3. Calculate Translation (Center X/Z, Bottom Y at 0)
+    const centerX = (min[0] + max[0]) / 2;
+    const centerZ = (min[2] + max[2]) / 2;
+    const bottomY = min[1];
+
+    const globalTransform = mat4.create();
+    // We want: Final = Scale * TranslationToOrigin
+    mat4.scale(globalTransform, globalTransform, [scaleFactor, scaleFactor, scaleFactor]);
+    mat4.translate(globalTransform, globalTransform, [-centerX, -bottomY, -centerZ]);
+
+    // 4. Apply to all instances
+    instances.forEach(inst => {
+      const currentWorld = mat4.create();
+      mat4.invert(currentWorld, inst.invMatrix);
+      
+      // Target World = Normalization * CurrentWorld
+      const newWorld = mat4.create();
+      mat4.multiply(newWorld, globalTransform, currentWorld);
+
+      // Decompose the matrix back into your object components
+      // Assuming inst has .position (vec3), .rotation (quat), .scale (vec3)
+      if (!inst.position) inst.position = vec3.create();
+      if (!inst.rotation) inst.rotation = quat.create();
+      if (!inst.scale) inst.scale = vec3.create();
+
+      mat4.getTranslation(inst.position, newWorld);
+      mat4.getRotation(inst.rotation, newWorld);
+      mat4.getScaling(inst.scale, newWorld);
+
+      // Sync the invMatrix used by the renderer/BVH to the new state
+      mat4.invert(inst.invMatrix, newWorld);
+    });
+  }
+
+  async getBufferData(accessorIdx, json, internalBinary) {
+    if (accessorIdx === undefined) return null;
+    const acc = json.accessors[accessorIdx];
+    const view = json.bufferViews[acc.bufferView];
+    const buffer = json.buffers[view.buffer];
     
-    modelData.index_positions = indices instanceof Uint16Array ? new Uint32Array(indices) : indices;
-    modelData.index_normals = new Uint32Array(modelData.index_positions);
-    modelData.index_texcoords = new Uint32Array(modelData.index_positions);
+    let bin;
+    if (!buffer.uri) {
+      bin = internalBinary;
+    } else {
+      const blobUrl = this.resolveUri(buffer.uri); // Use resolver here
+      const res = await fetch(blobUrl);
+      bin = await res.arrayBuffer();
+    }
+
+    const offset = (view.byteOffset || 0) + (acc.byteOffset || 0);
+    const stride = view.byteStride || 0; 
+    const count = acc.count * (acc.type === 'VEC3' ? 3 : acc.type === 'VEC2' ? 2 : 1);
+    
+    if (acc.componentType === 5126) return new Float32Array(bin, offset, count);
+    if (acc.componentType === 5123) return new Uint16Array(bin, offset, acc.count);
+    if (acc.componentType === 5125) return new Uint32Array(bin, offset, acc.count);
+    return null;
   }
 
   createMaterial(gltfMat, json, bin) {
@@ -1451,67 +1533,137 @@ class GLBLoader {
       const view = json.bufferViews[image.bufferView];
       const blob = new Blob([new Uint8Array(bin, view.byteOffset, view.byteLength)], { type: image.mimeType });
       url = URL.createObjectURL(blob);
-    } else {
-      url = image.uri;
+    } else if (image.uri) {
+      url = this.resolveUri(image.uri); // Use resolver here
     }
+
     const tex = new Texture(url, name);
     this.textureCache.set(idx, tex);
     return tex;
   }
+
+  collectAssets(instances, materials) {
+    const mats = [...new Set(instances.map(i => i.material))];
+    const texs = [];
+    mats.forEach(m => {
+      ['albedoTex', 'normalTex', 'roughnessTex', 'metallicTex', 'emissiveTex'].forEach(prop => {
+        if (m[prop] && !texs.includes(m[prop])) texs.push(m[prop]);
+      });
+    });
+    const models = [...new Set(instances.map(i => i.model))];
+    return { mats, texs, models };
+  }
 }
 window.handleUpload = (input) => {
   const files = Array.from(input.files);
-  
+
   files.forEach(async (file) => {
-    var name = file.name.toLowerCase();
+    const name = file.name.toLowerCase();
     const isOBJ = name.endsWith('.obj');
     const isImage = /\.(jpe?g|png|webp)$/i.test(name);
     const isHDR = name.endsWith('.hdr');
+    const isGLB = name.endsWith('.glb');
+    const isZIP = name.endsWith('.zip');
 
-    if (name.endsWith('.glb')) {
-      const loader = new GLBLoader();
-      try {
-        // Create an object URL for the uploaded file
-        const url = URL.createObjectURL(file);
-        
-        // The loader parses the hierarchy and returns an array of Model instances
-        const {nodes, models, mats, texs} = await loader.load(url);
-        
-        nodes.forEach(n => {
-          // Add to your global scene or object list
-          State.scene.objects.push(n); 
-          State.nodes.push(n);
+    // Helper to integrate loader results into the global State
+    const addGltfResultToState = (result) => {
+      const { nodes, models, mats, texs } = result;
 
-          // Optional: Trigger a UI update or sidebar refresh
-          console.log(`Added GLB component: ${n.name}`);
-        });
+      nodes.forEach(n => {
+        State.scene.objects.push(n);
+        State.nodes.push(n);
+      });
 
-        State.assets = State.assets.concat(models);
-        State.assets = State.assets.concat(mats);
-        State.assets = State.assets.concat(texs);
+      State.assets = State.assets.concat(models, mats, texs);
+      renderAssets();
 
-        renderAssets();
+      if (models.length > 0) {
         selectNode(models[0].id);
+      }
+    };
 
-        // Cleanup the temporary URL
+    // Handle GLB (Binary)
+    if (isGLB) {
+      const loader = new GLTFLoader();
+      try {
+        const url = URL.createObjectURL(file);
+        const result = await loader.loadGLB(url);
+        addGltfResultToState(result);
         URL.revokeObjectURL(url);
+        console.log(`Loaded GLB: ${file.name}`);
       } catch (err) {
         console.error("Failed to load GLB:", err);
       }
       return;
     }
 
+    // Handle ZIP (gltf + bin + textures)
+    if (isZIP) {
+      try {
+        const zip = await JSZip.loadAsync(file);
+        const assetMap = new Map();
+        let mainModelEntry = null;
+        let mainModelPath = "";
+
+        const entries = Object.keys(zip.files);
+        for (const path of entries) {
+          const entry = zip.files[path];
+          if (entry.dir) continue;
+
+          const blob = await entry.async("blob");
+          const blobUrl = URL.createObjectURL(blob);
+          assetMap.set(path, blobUrl);
+
+          // Look for .gltf OR .glb inside the ZIP
+          const lowerPath = path.toLowerCase();
+          if (lowerPath.endsWith('.gltf') || lowerPath.endsWith('.glb')) {
+            // Prioritize .gltf if multiple exist, or just take the first one found
+            if (!mainModelEntry || lowerPath.endsWith('.gltf')) {
+              mainModelEntry = entry;
+              mainModelPath = path;
+            }
+          }
+        }
+
+        if (!mainModelEntry) throw new Error("No .gltf or .glb file found in ZIP");
+
+        const lastSlash = mainModelPath.lastIndexOf('/');
+        const basePath = lastSlash === -1 ? "" : mainModelPath.substring(0, lastSlash + 1);
+
+        const loader = new GLTFLoader();
+        let result;
+
+        if (mainModelPath.toLowerCase().endsWith('.glb')) {
+          // It's a GLB inside a ZIP: Use the blob URL we just created
+          const glbUrl = assetMap.get(mainModelPath);
+          result = await loader.loadGLB(glbUrl, assetMap, basePath);
+        } else {
+          // It's a standard GLTF JSON
+          const jsonText = await mainModelEntry.async("string");
+          result = await loader.loadFromAssets(JSON.parse(jsonText), assetMap, basePath);
+        }
+        
+        addGltfResultToState(result);
+      } catch (err) {
+        console.error("Failed to load ZIP:", err);
+      }
+      return;
+    }
+
+    // Handle standard OBJ
     if (isOBJ) {
       const url = URL.createObjectURL(file);
       const model = await new ModelData(file.name).loadOBJ(url).loaded;
       model.renormalize();
       model.generateBVH();
       State.assets.push(model);
-
       renderAssets();
       URL.revokeObjectURL(url);
-      console.log(`Model ${file.name} processed and added to assets.`);
-    } else if (isImage) {
+      console.log(`Model ${file.name} processed.`);
+    } 
+    
+    // Handle Images
+    else if (isImage) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const tex = new Texture(e.target.result, file.name);
@@ -1519,7 +1671,10 @@ window.handleUpload = (input) => {
         renderAssets();
       };
       reader.readAsDataURL(file);
-    } else if (isHDR) {
+    } 
+    
+    // Handle HDR
+    else if (isHDR) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const tex = new HDRTexture(e.target.result, file.name);
