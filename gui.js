@@ -410,7 +410,7 @@ const fs = `#version 300 es
     vec3 refractDir = refract(-V, N, 1.0 / u_ior);
     vec3 transLight = sampleSky(refractDir, roughness) * transmissionFactor;
     vec3 reflLight = sampleSky(R, roughness);
-    vec3 transmissionColor = mix(transLight, reflLight, F) * 2.;
+    vec3 transmissionColor = mix(transLight, reflLight, F) * 2.5;
     float avgTrans = (transmissionFactor.r + transmissionFactor.g + transmissionFactor.b) / 3.0;
     alpha = mix(1.0 - avgTrans, 1.0, F.r); 
   
@@ -812,6 +812,7 @@ const selectAsset = asset => { State.selectedAsset = asset; State.selected=null;
 
 const renderList = () => {
   const root = document.getElementById('node-list'); root.innerHTML = '';
+  State.nodes = State.nodes.filter((v,i)=>i == 0 || v != State.nodes[i-1]); // Fix weird duplications
   State.nodes.forEach(n => {
     const el = document.createElement('div'); 
     el.className = `node-item ${State.selected?.id === n.id ? 'selected' : ''}`;
@@ -1068,6 +1069,7 @@ const renderInspector = () => {
 
     const m = gui.addFolder('Material');
     var mslot;
+    m.add(n, 'enableNEE').name('Enable Emissive Next Event Estimation');
     n.removeMaterial = ()=>{ n.material = defaultMaterial; mslot.textContent = "None (Default) - Drop Material"; }
     m.add(n, 'removeMaterial').name('Remove Material');
     mslot = createAssetSlot(m, "None (Default) - Drop Material", Material, n, 'material');
@@ -1078,9 +1080,19 @@ const renderInspector = () => {
   } else if (State.selectedAsset) {
     const a = State.selectedAsset;
     gui.add(a, 'name').name('Asset Name').onFinishChange(renderAssets);
+    if (a instanceof Material) {
+      var updateMat = () => { generateMaterialPreview(a); img.src = renderPreview(a, 256); renderAssets(); }
+
+      gui.addColor(a, 'color').name('Base Color').onChange(updateMat);
+      gui.add(a, 'roughness', 0, 1).name('Roughness').onChange(updateMat);
+      gui.add(a, 'metallic', 0, 1).name('Metallic').onChange(updateMat);
+      gui.add(a, 'ior', 1, 2.5).name('IOR').onChange(updateMat);
+    }
+    
     var img = document.createElement('img');
     img.src = renderPreview(a,256);
-    gui.domElement.appendChild(img);
+    gui.domElement.children[1].appendChild(img);
+
     if (a instanceof ModelData) {
       var updateModel = ()=>{ generateModelPreview(a); img.src = renderPreview(a,256); renderAssets(); }
       function updateModelGeometry() {
@@ -1113,13 +1125,6 @@ const renderInspector = () => {
       gui.add(a, 'sphericalUVs').name('Calculate Spherical UVs').onChange(updateModel);
     }
     if (a instanceof Material) {
-      var updateMat = () => { generateMaterialPreview(a); img.src = renderPreview(a, 256); renderAssets(); }
-
-      gui.addColor(a, 'color').name('Base Color').onChange(updateMat);
-      gui.add(a, 'roughness', 0, 1).name('Roughness').onChange(updateMat);
-      gui.add(a, 'metallic', 0, 1).name('Metallic').onChange(updateMat);
-      gui.add(a, 'ior', 1, 2.5).name('IOR').onChange(updateMat);
-
       const disp = gui.addFolder('Disney Layers');
       disp.add(a, 'specularTint', 0, 1).name('Specular Tint').onChange(updateMat);
       //disp.add(a, 'anisotropic', 0, 1).name('Anisotropic').onChange(updateMat);
@@ -1140,7 +1145,7 @@ const renderInspector = () => {
       
       const emis = gui.addFolder('Emission');
       emis.addColor(a, 'emittance').name('Color').onChange(updateMat);
-      emis.add(a, 'emissionIntensity', 0, 100).name('Intensity').onChange(updateMat);
+      emis.add(a, 'emissionIntensity').name('Intensity').onChange(updateMat);
 
       const tex = gui.addFolder('Textures');
       tex.add(a.uvScale, '0').name("UV Scale X").onChange(updateMat);
@@ -1174,6 +1179,10 @@ const renderInspector = () => {
       ph.add(a, 'friction', 0, 1).name('Friction');
       ph.add(a, 'restitution', 0, 1).name('Bounciness');
     }
+    if (a instanceof HDRTexture) {
+      gui.add(a, 'enableNEE').name('Enable Emissive Next Event Estimation');
+      gui.add(a, 'exposure').name('Exposure');
+    }
   }
 };
 const renderSceneInspector = () => {
@@ -1195,13 +1204,15 @@ const renderSceneInspector = () => {
 
   const a = State;
   const bg = gui.addFolder('Background');
-  bg.addColor(a,'backgroundColor').name("Color");
+  bg.addColor(a,'backgroundColor').listen().name("Color");
   bg.add(a,'backgroundIntensity').name("Intensity");
   const bgt = gui.addFolder('Background Texture');
   var bslot;
   a.removeBackground = ()=>{ a.background = null; bslot.textContent = "Drop HDR Texture Here"; }
   bgt.add(a, 'removeBackground').name('Remove Texture');
-  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background');
+  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background').onchange(()=>{
+    State.backgroundColor = [1,1,1];
+  });
 }
 // Canvas Drop for Models & Materials
 gl_canvas.ondragover = e => e.preventDefault();
@@ -1885,8 +1896,8 @@ function SaveRender(name) {
 function updateScene(scene) {
   scene.objects = State.nodes//.filter(n=>n.type!="Camera");
   var col = State.backgroundColor;
-  var mod = State.backgroundIntensity;
-  if (!State.background) scene.background = new HDRTexture([col[0]*mod,col[1]*mod,col[2]*mod,1]);
+  var mul = State.backgroundIntensity;
+  if (!State.background) scene.background = new HDRTexture([mul*col[0],mul*col[1],mul*col[2],1]);
   else scene.background = State.background;
   scene.bounces = Number(document.getElementById('render-bounces').value);
 
