@@ -18,6 +18,153 @@ var SceneList = [
     }
   },
   {
+    name: "Starter Box + Skybox",
+    load: async function() {},
+    create: async function(canvas) {
+      canvas.width = 1280;
+      canvas.height = 720;
+
+      var scene = new Scene(canvas);
+      
+      var cam = scene.camera;
+      cam.lookAt(0,1,0);
+      cam.setPosition(8.17,4.62,4.47);
+
+      scene.background = new HDRTexture('assets/noon_sky.hdr','Skybox');
+      await Promise.all([
+        scene.background.loaded,
+      ]);
+
+      var mat = new Material("Material 1",[0.8,0.8,0.8],0.5);
+      scene.newPlane("Ground", mat, 0, 1, 0, 0);
+      scene.newCube("Cube 1",mat,-1,0,-1,1,2,1);
+      return scene;
+    }
+  },
+  {
+    name: "Emissive MIS & Angled Specular Floor Test",
+    load: async function() {},
+    create: async function(canvas) {
+      canvas.width = 1280;
+      canvas.height = 720;
+      var scene = new Scene(canvas);
+      
+      scene.background = new HDRTexture([0.01, 0.01, 0.01]);
+      
+      var cam = scene.camera;
+      cam.lookAt(0, 0, -4);
+      cam.setPosition(0, 10, 4);
+      
+      // ==========================================
+      // CONSTANTS
+      // ==========================================
+      const TOTAL_POWER = 10;
+      const sphereSizes = [0.05, 0.15, 0.3, 0.6, 1.0, 1.5];
+      const numSpheres = sphereSizes.length;
+      
+      const camPos = cam.position; 
+      const lightCenter = [0, 2.5, -12.0];
+      // ==========================================
+
+      // --- 1. GENERATE EQUAL-POWER LIGHTS ---
+      for (let i = 0; i < numSpheres; i++) {
+        let radius = sphereSizes[i];
+        let area = 4 * Math.PI * radius * radius;
+        let intensity = TOTAL_POWER / area; 
+        
+        let mat = new Material("LightMat_" + i, [0, 0, 0], 0, {
+          emittance: [1.0, 0.95, 0.9],
+          emissionIntensity: intensity
+        });
+        
+        let x = (i - (numSpheres - 1) / 2) * 3; 
+        let s = scene.newSphere("Light_" + i, mat, x, lightCenter[1], lightCenter[2], radius);
+        s.enableNEE = true; 
+      }
+
+      // --- 2. GENERATE TILTED REFLECTIVE CHUNKS ---
+      const N_CHUNKS = 5;
+      
+      // The dimensions applied to the .scale property for a SINGLE strip.
+      // (Note: If your engine's base cube spans -1 to 1 instead of -0.5 to 0.5, 
+      // these will act as half-extents. Adjust if they look twice as big as intended).
+      const stripW = 15.0;     
+      const thickness = 0.1; 
+      const stripDepth = 1.4; // Depth of one strip (so a full chunk is 2.8)
+      
+      const startZ = 0.0;     
+      const spacingZ = 3.2;   
+
+      // Vector used to scale both strips
+      const scaleVec = vec3.fromValues(stripW, thickness, stripDepth/2);
+
+      for (let i = 0; i < N_CHUNKS; i++) {
+        let roughness = Math.max(0.01, (N_CHUNKS - 1 - i) / (N_CHUNKS - 1));
+        
+        let matMetal = new Material("Metal_" + i, [1.0, 0.76, 0.33], roughness, { metallic: 1.0 });
+        let matDielec = new Material("Dielec_" + i, [0.05, 0.2, 0.6], roughness, { metallic: 0.0, ior: 2.4 });
+        
+        // World position of the chunk's mathematical center
+        var x = startZ - i * spacingZ;
+        let P = [0, 0.02*(x - lightCenter[2])**2 - 1, x];
+        let P_vec = vec3.fromValues(P[0], P[1], P[2]);
+        
+        // --- MATH: Calculate the Half-Vector (H) ---
+        let V = [camPos[0] - P[0], camPos[1] - P[1], camPos[2] - P[2]];
+        let lenV = Math.sqrt(V[0]*V[0] + V[1]*V[1] + V[2]*V[2]);
+        V = [V[0]/lenV, V[1]/lenV, V[2]/lenV];
+        
+        let L = [lightCenter[0] - P[0], lightCenter[1] - P[1], lightCenter[2] - P[2]];
+        let lenL = Math.sqrt(L[0]*L[0] + L[1]*L[1] + L[2]*L[2]);
+        L = [L[0]/lenL, L[1]/lenL, L[2]/lenL];
+        
+        let H = [V[0] + L[0], V[1] + L[1], V[2] + L[2]];
+        let lenH = Math.sqrt(H[0]*H[0] + H[1]*H[1] + H[2]*H[2]);
+        H = [H[0]/lenH, H[1]/lenH, H[2]/lenH];
+        
+        // Calculate pitch (rotation around X) and quaternion
+        let pitch = Math.atan2(H[2], H[1]);
+        let qx = Math.sin(pitch / 2);
+        let qw = Math.cos(pitch / 2);
+        let rotQuat = quat.fromValues(qx, 0, 0, qw);
+
+        // --- CALC LOCAL OFFSETS SO STRIPS DON'T OVERLAP ---
+        // If your base cube is 1x1x1, you offset by stripDepth / 2.
+        // If your base cube is 2x2x2 (spanning -1 to 1), you offset by stripDepth.
+        let offsetAmt = stripDepth / 2.0; 
+
+        // Dielectric (Near/Bottom half): shifted towards +Z locally
+        let localOffsetD = vec3.fromValues(0, 0, offsetAmt);
+        let globalOffsetD = vec3.create();
+        vec3.transformQuat(globalOffsetD, localOffsetD, rotQuat); // Rotate the offset!
+        
+        let posD = vec3.create();
+        vec3.add(posD, P_vec, globalOffsetD); // Add rotated offset to chunk center
+
+        // Metal (Far/Top half): shifted towards -Z locally
+        let localOffsetM = vec3.fromValues(0, 0, -offsetAmt);
+        let globalOffsetM = vec3.create();
+        vec3.transformQuat(globalOffsetM, localOffsetM, rotQuat); // Rotate the offset!
+        
+        let posM = vec3.create();
+        vec3.add(posM, P_vec, globalOffsetM); // Add rotated offset to chunk center
+
+        // --- CREATE MESHES WITH SRT ---
+        let dStrip = scene.newCube("Dielec_" + i, matDielec);
+        dStrip.position = posD;
+        dStrip.rotation = rotQuat;
+        dStrip.scale = scaleVec;
+
+        let mStrip = scene.newCube("Metal_" + i, matMetal);
+        mStrip.position = posM;
+        mStrip.rotation = rotQuat;
+        mStrip.scale = scaleVec;
+      }
+
+      return scene;
+    }
+  },
+  {
     name: "Rook & Diamond",
     load: async function() {},
     create: async function(canvas) {
@@ -66,10 +213,10 @@ var SceneList = [
       var matRedGlass = new Material("Red Glass",[1.0, 0.2, 0.2], 0.0, {transmission: 1.0});
       
       scene.newPlane("Floor",matWhite, 0, 1, 0, 0);    // Floor (POM Textured)
-      scene.newSphere("Light",matLight, 0, 3.5, 0, 0.5);
+      scene.newSphere("Light",matLight, 0, 3.5, 0, 0.5);//.enableNEE = true;
 
       var matDiamond = new Material("Diamond Material", [1.0, 1.0, 1.0], 0.0, { ior:2.4, transmission: 1.0 });
-      var model = scene.newModel("Diamond",matDiamond,diamondModel,false).translate(0,1,0);
+      var model = scene.newModel("Diamond",matDiamond,diamondModel,true).translate(0,1,0);
       model.icon = "💎";
       model.collider = new ConvexCollider();
       model.collider.hulls = [{
@@ -77,7 +224,7 @@ var SceneList = [
         faces: Array.from(diamondModel.index_positions),
         offset: [0,0,0]
       }];
-      scene.newModel("Rook",matRedGlass,rookModel,false).translate(-1,0,-1);
+      scene.newModel("Rook",matRedGlass,rookModel,true).translate(-1,0,-1);
       
       scene.bounces = 10;
 
@@ -418,6 +565,39 @@ var SceneList = [
       //box.updateMatrix();
 
       scene.bounces = 10;
+
+      return scene;
+    }
+  },
+  {
+    name: "Leaves",
+    load: async function() {},
+    create: async function(canvas) {
+      canvas.width = 1024;
+      canvas.height = 768;
+      
+      var scene = new Scene(canvas);
+
+      scene.background = new HDRTexture('assets/noon_sky.hdr','Noon Sky');
+      var leaves = new Texture('assets/leaves.png','leaves');
+      await Promise.all([
+        leaves.loaded,
+        scene.background.loaded,
+      ]);
+
+      var matWhite = new Material("White",[0.8, 0.8, 0.8], 1.0);
+      var matLight = new Material("Light",[0.0, 0.0, 0.0], 1.0, {emissionIntensity: 15});
+
+      var leavesMat = new Material("Bunny Material",[1.0, 1.0, 1.0], 0.5, {
+        albedoTex: leaves,
+        uvScale: [0.1, 0.1],
+      });
+
+      scene.newPlane("Leaves",leavesMat, 0, 1, 0, 2); 
+      //scene.newSphere("Light",matLight, 0, 3.5, 0, 0.5);
+      scene.newCube("Cube",matWhite,-1,-1,-1,1,1,1);
+
+      scene.bounces = 8;
 
       return scene;
     }
