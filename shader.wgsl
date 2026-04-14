@@ -2089,6 +2089,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   // textureStore(output_tex, id.xy, vec4f(ray.origin + hit.t * ray.direction, 1.0));
   // textureStore(output_tex, id.xy, vec4f(ctx.albedo, 1.0));
   // hit.hit_uv = fract(hit.hit_uv); textureStore(output_tex, id.xy, vec4f(hit.hit_uv.x,hit.hit_uv.y,1. - hit.hit_uv.x * hit.hit_uv.y, 1.0));
+  // textureStore(output_tex, id.xy, vec4f(vec3f(pow(0.97,f32(hit.count))),1.0));
   // return;
 
   //var shadow = trace_scene_shadow(ray, -1, 10);
@@ -2162,7 +2163,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let ctx = get_surface_context(hit, mat, tbn, final_uv);
 
     // --- IMPLICIT LIGHT HIT (BSDF Bounce) ---
-    if (length(ctx.emittance) > 0.0) { 
+    if (length(ctx.emittance) > 0.0) {
       var weight = 1.0;
       if (HAS_LIGHTS && bounce > 0 && hit.o_idx > 0 && obj.light_idx >= 0) {
         let light = lights[obj.light_idx];
@@ -2181,16 +2182,48 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let V = -ray.direction;
     let n_orient = select(-ctx.normal, ctx.normal, dot(ctx.normal, V) > 0.0);
 
+    // --- EXPLICIT LIGHT SAMPLING (NEE) ---
     if (HAS_LIGHTS) {
-      for (var i = 0u; i < arrayLength(&lights); i++) {
+      var selected_light_idx: i32 = -1;
+      var weight_sum = 0.0;
+      var selected_weight = 0.0;
+      
+      // 1. Evaluate all lights in a single pass (Reservoir Sampling)
+      let num_lights = arrayLength(&lights);
+      for (var i = 0u; i < num_lights; i++) {
         let light = lights[i];
         if (light.obj_idx < 0) { continue; }
         let l_obj = objects[light.obj_idx];
-        if (l_obj.material_idx < 0) { continue; }
+        
+        // Calculate importance heuristic (Power / Distance^2)
+        let to_light = l_obj.world_position - hit_pos;
+        let d2 = max(dot(to_light, to_light), 0.001);
+        let w = light.power / d2;
+        
+        weight_sum += w;
+        
+        // Mathematically guaranteed selection based on relative weight
+        if (rand_pcg() < (w / weight_sum)) {
+          selected_light_idx = i32(i);
+          selected_weight = w;
+        }
+      }
+      
+      // 2. Evaluate the single chosen light
+      if (selected_light_idx >= 0 && weight_sum > 0.0) {
+        let light = lights[u32(selected_light_idx)];
+        let l_obj = objects[light.obj_idx];
 
         var light_sample = sample_light(light, l_obj, hit_pos);
-        let incoming = evaluate_nee(light_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, light.obj_idx);
-        radiance += throughput * clamp_firefly(incoming, bounce);
+        if (light_sample.pdf > 0.0) {
+          
+          // FIX: Multiply the raw directional PDF by the chance we picked this light
+          let selection_pdf = selected_weight / weight_sum;
+          light_sample.pdf *= selection_pdf;
+          
+          let incoming = evaluate_nee(light_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, light.obj_idx);
+          radiance += throughput * clamp_firefly(incoming, bounce);
+        }
       }
     }
 

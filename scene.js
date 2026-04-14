@@ -602,6 +602,46 @@ var SceneList = [
       return scene;
     }
   },
+  {
+    name: "Sponza Test",
+    load: async function() {},
+    create: async function(canvas) {
+      canvas.width = 528;
+      canvas.height = 304;
+
+      const loader = new GLTFLoader();
+      var scene = new Scene(canvas);
+
+      scene.background = new HDRTexture('assets/sky2.hdr','Noon Sky');
+      await Promise.all([
+        scene.background.loaded,
+      ]);
+      
+      var cam = scene.camera;
+      cam.exposure = 20;
+      cam.lookAt(-0.25,1.66,-0.1);
+      cam.setPosition(9.96,2.9,0.1);
+
+      var lightMat = new Material("Light Mat",[0,0,0],0,{emissionIntensity:5,emittance:[1,0.67,0.1]});
+      scene.newSphere("T1",lightMat,4.4,2.1,-1.44,0.1).enableNEE = true;
+      scene.newSphere("T2",lightMat,-4.5,2.1,-1.44,0.1).enableNEE = true;
+      scene.newSphere("T3",lightMat,-4.5,2.1,1.44,0.1).enableNEE = true;
+      scene.newSphere("T4",lightMat,4.4,2.1,1.44,0.1).enableNEE = true;
+      scene.newSphere("T5",lightMat,-9.11,2,-3.28,0.2).enableNEE = true;
+      scene.newSphere("T6",lightMat,9.46,2,-3.28,0.2).enableNEE = true;
+      scene.newSphere("T7",lightMat,9.46,2,3.53,0.2).enableNEE = true;
+      scene.newSphere("T8",lightMat,-9.11,2,3.53,0.2).enableNEE = true;
+
+      // const { models } = await loader.load('assets/material_ball.glb');
+      // models[0].bakeTransform(mat4.fromRotation(mat4.create(), -Math.PI / 2, [1, 0, 0]));
+      // models[0].renormalize(true);
+      // models[0].generateBVH();
+      
+      // scene.objects = scene.objects.concat(models);
+      scene.bounces = 4;
+      return scene;
+    },
+  }
   // {
   //   name: "Material Test",
   //   load: async function() {},
@@ -643,6 +683,10 @@ async function loadScene() {
   document.getElementById('render-h').value = canvas.height;
   document.getElementById('render-bounces').value = scene.bounces;
   State.scene = scene;
+  Cam.fov = scene.camera.fov;
+  Cam.aperture = scene.camera.aperture;
+  Cam.focusDist = scene.camera.focusDist;
+  Cam.exposure = scene.camera.exposure;
   Cam.updateOrbit(scene.camera.position,scene.camera.target);
   State.nodes = scene.objects;
   //State.nodes.unshift(); // add camera

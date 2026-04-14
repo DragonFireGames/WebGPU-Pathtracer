@@ -454,7 +454,7 @@ const fs = `#version 300 es
     if (u_hasEmissive) emissive *= pow(texture(u_emissiveTex, uv).rgb, vec3(2.2));
     finalColor += emissive;
 
-    finalColor = finalColor / (finalColor + vec3(1.0)); // Tone Mapping
+    finalColor = finalColor / (finalColor + vec3(0.3)); // Tone Mapping
     outColor = vec4(pow(finalColor, vec3(1.0/2.2)), alpha);
   }
 `;
@@ -1002,7 +1002,14 @@ const renderAssets = async () => {
 // Helper for Asset Drag and Drop in GUI
 const createAssetSlot = (guiFolder, label, assetType, assetParent, assetPath) => {
   const slot = document.createElement('div'); slot.className = 'tex-slot';
-  slot.textContent = assetParent[assetPath] ? assetParent[assetPath].name : label;
+  slot.appendChild(document.createTextNode(assetParent[assetPath] ? assetParent[assetPath].name : label));
+  if (assetParent[assetPath]) {
+    slot.appendChild(document.createElement('br'));
+    var img = document.createElement('img');
+    img.src = renderPreview(assetParent[assetPath],256);
+    img.className = "asset-preview";
+    slot.appendChild(img);
+  }
   slot.ondragover = e => { e.preventDefault(); slot.classList.add('drag-over'); };
   slot.ondragleave = () => slot.classList.remove('drag-over');
   slot.ondrop = e => {
@@ -1069,7 +1076,7 @@ const renderInspector = () => {
 
     const m = gui.addFolder('Material');
     var mslot;
-    m.add(n, 'enableNEE').name('Enable Emissive Next Event Estimation');
+    if (State.scene.lightPower(n).power > 0) m.add(n, 'enableNEE').name('Enable Emissive Next Event Estimation');
     n.removeMaterial = ()=>{ n.material = defaultMaterial; mslot.textContent = "None (Default) - Drop Material"; }
     m.add(n, 'removeMaterial').name('Remove Material');
     mslot = createAssetSlot(m, "None (Default) - Drop Material", Material, n, 'material');
@@ -1091,6 +1098,7 @@ const renderInspector = () => {
     
     var img = document.createElement('img');
     img.src = renderPreview(a,256);
+    img.className = "asset-preview";
     gui.domElement.children[1].appendChild(img);
 
     if (a instanceof ModelData) {
@@ -1210,9 +1218,8 @@ const renderSceneInspector = () => {
   var bslot;
   a.removeBackground = ()=>{ a.background = null; bslot.textContent = "Drop HDR Texture Here"; }
   bgt.add(a, 'removeBackground').name('Remove Texture');
-  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background').onchange(()=>{
-    State.backgroundColor = [1,1,1];
-  });
+  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background');
+  bslot.onChange(()=>{ State.backgroundColor = [1,1,1]; });
 }
 // Canvas Drop for Models & Materials
 gl_canvas.ondragover = e => e.preventDefault();
@@ -1269,16 +1276,15 @@ class GLTFLoader {
   constructor() {
     this.textureCache = new Map();
     this.assetMap = new Map();
-    this.basePath = ""; // New property
+    this.basePath = "";
   }
 
   async loadFromAssets(json, assetMap = new Map(), basePath = "") {
     this.assetMap = assetMap;
-    this.basePath = basePath; // Store the directory prefix
+    this.basePath = basePath;
     return this.parse(json, null);
   }
 
-  // Helper to resolve URI to a Blob URL from the Map
   resolveUri(uri) {
     if (!uri) return null;
     if (uri.startsWith('data:')) return uri;
@@ -1288,7 +1294,6 @@ class GLTFLoader {
     return uri;
   }
 
-  // Entry point for .glb files
   async loadGLB(url, assetMap = new Map(), basePath = "") {
     this.assetMap = assetMap;
     this.basePath = basePath;
@@ -1309,43 +1314,66 @@ class GLTFLoader {
     return this.parse(json, binaryData);
   }
 
-  // Entry point for extracted ZIP contents
-  async loadFromAssets(json, assetMap, basePath = "") {
-    this.assetMap = assetMap;
-    this.basePath = basePath; // Store the directory prefix
-    return this.parse(json, null);
-  }
-
   async parse(json, internalBinary) {
-    // 1. Process Materials
     const materials = (json.materials || []).map(m => this.createMaterial(m, json, internalBinary));
-
-    // 2. Build Global World Matrices
     const worldMatrices = this.computeAllWorldMatrices(json);
 
-    // 3. Instantiate Models
-    const meshCache = new Map();
-    const instances = [];
+    const meshToSplits = new Map();
+    const allSplitModels = [];
 
+    // 1. Process geometries and split disconnected components from the "soup"
     for (let nodeIdx = 0; nodeIdx < json.nodes.length; nodeIdx++) {
       const node = json.nodes[nodeIdx];
       if (node.mesh === undefined) continue;
 
-      if (!meshCache.has(node.mesh)) {
-        meshCache.set(node.mesh, await this.processMesh(json.meshes[node.mesh], json, internalBinary));
+      if (!meshToSplits.has(node.mesh)) {
+        const splits = await this.processMesh(json.meshes[node.mesh], json, internalBinary);
+        meshToSplits.set(node.mesh, splits);
+        allSplitModels.push(...splits);
       }
+    }
 
-      const cachedPrimitives = meshCache.get(node.mesh);
-      cachedPrimitives.forEach((modelData, primIdx) => {
+    // 2. Deterministic Y-Locked Deduplication
+    const dedupeMap = this.deduplicateModels(allSplitModels);
+
+    // 3. Build Model Instances using extracted local transforms
+    const instances = [];
+    for (let nodeIdx = 0; nodeIdx < json.nodes.length; nodeIdx++) {
+      const node = json.nodes[nodeIdx];
+      if (node.mesh === undefined) continue;
+
+      const splits = meshToSplits.get(node.mesh);
+      splits.forEach((modelData, splitIdx) => {
+        const dedupeInfo = dedupeMap.get(modelData);
+        const baseModelData = dedupeInfo.base;
+        const T_inv = dedupeInfo.T_inv; 
+
+        const primIdx = modelData.sourcePrimIdx;
         const primitive = json.meshes[node.mesh].primitives[primIdx];
         const mat = primitive.material !== undefined ? materials[primitive.material] : new Material("Default");
-        const modelInstance = new Model(`${node.name || 'Node'}_${primIdx}`, mat, modelData);
         
-        mat4.invert(modelInstance.invMatrix, worldMatrices[nodeIdx]);
+        const modelInstance = new Model(`${node.name || 'Node'}_m${node.mesh}_p${primIdx}_s${splitIdx}`, mat, baseModelData);
+
+        const finalWorld = mat4.create();
+        mat4.multiply(finalWorld, worldMatrices[nodeIdx], T_inv);
+
+        if (mat4.invert(modelInstance.invMatrix, finalWorld)) {
+            if (!modelInstance.position) modelInstance.position = vec3.create();
+            if (!modelInstance.rotation) modelInstance.rotation = quat.create();
+            if (!modelInstance.scale) modelInstance.scale = vec3.create();
+
+            mat4.getTranslation(modelInstance.position, finalWorld);
+            mat4.getRotation(modelInstance.rotation, finalWorld);
+            mat4.getScaling(modelInstance.scale, finalWorld);
+        } else {
+            mat4.identity(modelInstance.invMatrix);
+        }
+
         instances.push(modelInstance);
       });
     }
 
+    // 4. Normalize the resulting final scene
     this.normalizeScene(instances);
 
     const assets = this.collectAssets(instances, materials);
@@ -1353,6 +1381,349 @@ class GLTFLoader {
 
     return { nodes: instances, ...assets };
   }
+
+  splitDisconnected(model) {
+    // Standard spatial hash based splitting for polygon soup
+    const numFaces = model.index_positions.length / 3;
+    if (numFaces === 0 || numFaces > 200000) return [model]; 
+
+    let min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    const pos = model.vertex_positions;
+    for(let i=0; i<pos.length; i+=3) {
+        min[0]=Math.min(min[0], pos[i]); max[0]=Math.max(max[0], pos[i]);
+        min[1]=Math.min(min[1], pos[i+1]); max[1]=Math.max(max[1], pos[i+1]);
+        min[2]=Math.min(min[2], pos[i+2]); max[2]=Math.max(max[2], pos[i+2]);
+    }
+    const maxDim = Math.max(max[0]-min[0], max[1]-min[1], max[2]-min[2], 1e-4);
+    
+    const hashTol = maxDim * 0.005; 
+    const getHash = (x, y, z) => `${Math.round(x / hashTol)}_${Math.round(y / hashTol)}_${Math.round(z / hashTol)}`;
+
+    const idx = model.index_positions;
+    const spatialHash = new Map();
+
+    for (let f = 0; f < numFaces; f++) {
+      for (let j = 0; j < 3; j++) {
+        const vi = idx[f * 3 + j];
+        const hash = getHash(pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
+        if (!spatialHash.has(hash)) spatialHash.set(hash, []);
+        spatialHash.get(hash).push(f);
+      }
+    }
+
+    const visited = new Uint8Array(numFaces);
+    const initialComponents = [];
+
+    for (let f = 0; f < numFaces; f++) {
+      if (visited[f]) continue;
+
+      const comp = [];
+      const queue = [f];
+      visited[f] = 1;
+
+      while (queue.length > 0) {
+        const curr = queue.shift();
+        comp.push(curr);
+
+        for (let j = 0; j < 3; j++) {
+          const vi = idx[curr * 3 + j];
+          const hash = getHash(pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
+          const neighbors = spatialHash.get(hash);
+          for (let n = 0; n < neighbors.length; n++) {
+            const nFace = neighbors[n];
+            if (!visited[nFace]) {
+              visited[nFace] = 1;
+              queue.push(nFace);
+            }
+          }
+        }
+      }
+      initialComponents.push(comp);
+    }
+    
+    if (initialComponents.length === 1 || initialComponents.length > 200) return [model];
+
+    const comps = initialComponents.map(faces => {
+      let cMin = [Infinity, Infinity, Infinity], cMax = [-Infinity, -Infinity, -Infinity];
+      for (let f of faces) {
+        for(let j=0; j<3; j++) {
+          let vi = idx[f * 3 + j];
+          let vx = pos[vi * 3], vy = pos[vi * 3 + 1], vz = pos[vi * 3 + 2];
+          if(vx < cMin[0]) cMin[0] = vx; if(vx > cMax[0]) cMax[0] = vx;
+          if(vy < cMin[1]) cMin[1] = vy; if(vy > cMax[1]) cMax[1] = vy;
+          if(vz < cMin[2]) cMin[2] = vz; if(vz > cMax[2]) cMax[2] = vz;
+        }
+      }
+      return { faces, aabb: {min: cMin, max: cMax} };
+    });
+
+    const margin = maxDim * 0.05; 
+    const aabbIntersect = (a, b) => {
+      return (a.min[0] <= b.max[0]+margin && a.max[0] >= b.min[0]-margin) &&
+             (a.min[1] <= b.max[1]+margin && a.max[1] >= b.min[1]-margin) &&
+             (a.min[2] <= b.max[2]+margin && a.max[2] >= b.min[2]-margin);
+    };
+
+    let merged = true;
+    while(merged) {
+      merged = false;
+      for(let i=0; i<comps.length; i++) {
+        for(let j=i+1; j<comps.length; j++) {
+          if (aabbIntersect(comps[i].aabb, comps[j].aabb)) {
+            comps[i].faces.push(...comps[j].faces);
+            comps[i].aabb.min = [Math.min(comps[i].aabb.min[0], comps[j].aabb.min[0]), Math.min(comps[i].aabb.min[1], comps[j].aabb.min[1]), Math.min(comps[i].aabb.min[2], comps[j].aabb.min[2])];
+            comps[i].aabb.max = [Math.max(comps[i].aabb.max[0], comps[j].aabb.max[0]), Math.max(comps[i].aabb.max[1], comps[j].aabb.max[1]), Math.max(comps[i].aabb.max[2], comps[j].aabb.max[2])];
+            comps.splice(j, 1);
+            merged = true; break;
+          }
+        }
+        if(merged) break;
+      }
+    }
+
+    if (comps.length === 1) return [model]; 
+
+    const splits = [];
+    for (let c = 0; c < comps.length; c++) {
+      const comp = comps[c].faces;
+      const newModel = new ModelData(`${model.name}_part${c}`);
+      newModel.sourcePrimIdx = model.sourcePrimIdx; 
+
+      const oldToNew = new Map();
+      const newPos = [], newNorm = [], newUV = [], newIdx = [];
+
+      for (let i = 0; i < comp.length; i++) {
+        const f = comp[i];
+        for (let j = 0; j < 3; j++) {
+          const vi = idx[f * 3 + j];
+          if (!oldToNew.has(vi)) {
+            oldToNew.set(vi, newPos.length / 3);
+            newPos.push(pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
+            if (model.vertex_normals) {
+              newNorm.push(model.vertex_normals[vi * 3], model.vertex_normals[vi * 3 + 1], model.vertex_normals[vi * 3 + 2]);
+            }
+            if (model.vertex_texcoords) {
+              newUV.push(model.vertex_texcoords[vi * 2], model.vertex_texcoords[vi * 2 + 1]);
+            }
+          }
+          newIdx.push(oldToNew.get(vi));
+        }
+      }
+
+      newModel.vertex_positions = new Float32Array(newPos);
+      if (newNorm.length) newModel.vertex_normals = new Float32Array(newNorm);
+      if (newUV.length) newModel.vertex_texcoords = new Float32Array(newUV);
+      newModel.index_positions = new Uint32Array(newIdx);
+      newModel.index_normals = newModel.index_positions;
+      newModel.index_texcoords = newModel.index_positions;
+
+      splits.push(newModel);
+    }
+    return splits;
+  }
+
+  buildSpatialHash(model, tolerance) {
+    model.spatialHash = new Map();
+    const pos = model.vertex_positions;
+    const invTol = 1.0 / tolerance;
+    for (let i=0; i<pos.length; i+=3) {
+        const cx = Math.round(pos[i]*invTol);
+        const cy = Math.round(pos[i+1]*invTol);
+        const cz = Math.round(pos[i+2]*invTol);
+        const hash = `${cx}_${cy}_${cz}`;
+        if (!model.spatialHash.has(hash)) model.spatialHash.set(hash, []);
+        model.spatialHash.get(hash).push([pos[i], pos[i+1], pos[i+2]]);
+    }
+  }
+
+  canonicalizeBase(model) {
+    const pos = model.vertex_positions;
+    const n = pos.length / 3;
+    if (n === 0) {
+      model.invCanonicalMatrix = mat4.create();
+      return;
+    }
+
+    // 1. Calculate precise AABB
+    let min = [Infinity, Infinity, Infinity];
+    let max = [-Infinity, -Infinity, -Infinity];
+    for (let i=0; i<n; i++) {
+        min[0] = Math.min(min[0], pos[i*3]); max[0] = Math.max(max[0], pos[i*3]);
+        min[1] = Math.min(min[1], pos[i*3+1]); max[1] = Math.max(max[1], pos[i*3+1]);
+        min[2] = Math.min(min[2], pos[i*3+2]); max[2] = Math.max(max[2], pos[i*3+2]);
+    }
+
+    const cx = (min[0] + max[0]) / 2;
+    const cy = (min[1] + max[1]) / 2;
+    const cz = (min[2] + max[2]) / 2;
+    
+    model.dimensions = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    const maxDim = Math.max(model.dimensions[0], model.dimensions[1], model.dimensions[2], 1e-4);
+    const scale = 1.0 / maxDim;
+
+    // Transform: Translate AABB center to origin, scale to Unit Box
+    // NO ROTATION APPLIED. Upright orientation is permanently locked.
+    const canonMat = mat4.create();
+    mat4.scale(canonMat, canonMat, [scale, scale, scale]);
+    mat4.translate(canonMat, canonMat, [-cx, -cy, -cz]);
+
+    const invCanon = mat4.create();
+    mat4.invert(invCanon, canonMat);
+
+    const normMat = mat4.create();
+    mat4.invert(normMat, canonMat);
+    mat4.transpose(normMat, normMat);
+
+    model.canonicalMin = [Infinity, Infinity, Infinity];
+    model.canonicalMax = [-Infinity, -Infinity, -Infinity];
+
+    for (let i=0; i<n; i++) {
+       let v = vec3.fromValues(pos[i*3], pos[i*3+1], pos[i*3+2]);
+       vec3.transformMat4(v, v, canonMat);
+       pos[i*3] = v[0]; pos[i*3+1] = v[1]; pos[i*3+2] = v[2];
+
+       model.canonicalMin[0] = Math.min(model.canonicalMin[0], v[0]);
+       model.canonicalMax[0] = Math.max(model.canonicalMax[0], v[0]);
+       model.canonicalMin[1] = Math.min(model.canonicalMin[1], v[1]);
+       model.canonicalMax[1] = Math.max(model.canonicalMax[1], v[1]);
+       model.canonicalMin[2] = Math.min(model.canonicalMin[2], v[2]);
+       model.canonicalMax[2] = Math.max(model.canonicalMax[2], v[2]);
+
+       if (model.vertex_normals && model.vertex_normals.length > i*3+2) {
+           let vn = vec3.fromValues(model.vertex_normals[i*3], model.vertex_normals[i*3+1], model.vertex_normals[i*3+2]);
+           let vnw = vec4.fromValues(vn[0], vn[1], vn[2], 0.0);
+           vec4.transformMat4(vnw, vnw, normMat);
+           vec3.set(vn, vnw[0], vnw[1], vnw[2]);
+           vec3.normalize(vn, vn);
+           model.vertex_normals[i*3] = vn[0];
+           model.vertex_normals[i*3+1] = vn[1];
+           model.vertex_normals[i*3+2] = vn[2];
+       }
+    }
+
+    model.invCanonicalMatrix = invCanon;
+  }
+
+  deduplicateModels(models) {
+    const dedupeMap = new Map();
+    const bases = [];
+    
+    // The 4 acceptable Y-Axis Rotations (0, 90, 180, 270 degrees)
+    const yRotations = [
+      mat4.fromValues(1,0,0,0,  0,1,0,0,  0,0,1,0,  0,0,0,1),   // 0 deg
+      mat4.fromValues(0,0,-1,0, 0,1,0,0,  1,0,0,0,  0,0,0,1),   // 90 deg
+      mat4.fromValues(-1,0,0,0, 0,1,0,0,  0,0,-1,0, 0,0,0,1),   // 180 deg
+      mat4.fromValues(0,0,1,0,  0,1,0,0, -1,0,0,0,  0,0,0,1)    // 270 deg
+    ];
+
+    for (let i = 0; i < models.length; i++) {
+      const cand = models[i];
+      this.canonicalizeBase(cand);
+
+      let matched = false;
+
+      for (let b = 0; b < bases.length; b++) {
+        const base = bases[b];
+        
+        // Strict Gate 1: Vertex/Index counts must be roughly similar (15% tolerance for shimmers)
+        const vDiff = Math.abs(base.vertex_positions.length - cand.vertex_positions.length) / base.vertex_positions.length;
+        if (vDiff > 0.15) continue;
+
+        // Strict Gate 2: AABB Dimensions must match within 3%
+        const bd = base.dimensions;
+        const cd = cand.dimensions;
+        const dimTol = 0.03 * Math.max(bd[0], bd[1], bd[2]);
+        
+        const yMatch = Math.abs(bd[1] - cd[1]) <= dimTol;
+        const xzMatch0 = Math.abs(bd[0] - cd[0]) <= dimTol && Math.abs(bd[2] - cd[2]) <= dimTol; // 0 or 180 deg
+        const xzMatch90 = Math.abs(bd[0] - cd[2]) <= dimTol && Math.abs(bd[2] - cd[0]) <= dimTol; // 90 or 270 deg
+
+        if (!yMatch || (!xzMatch0 && !xzMatch90)) continue;
+
+        // Test the 4 specific Y-rotations
+        for (let rIdx = 0; rIdx < yRotations.length; rIdx++) {
+           const R = yRotations[rIdx];
+           
+           // If AABB says 0/180 but matrix is 90/270, skip
+           if (xzMatch0 && !xzMatch90 && (rIdx === 1 || rIdx === 3)) continue;
+           if (xzMatch90 && !xzMatch0 && (rIdx === 0 || rIdx === 2)) continue;
+
+           // Tolerance of 0.04 (4% of the unit box size) to account for float "shimmers"
+           if (this.testTransform(base, cand, R, 0.04)) {
+              const R_inv = mat4.create();
+              mat4.invert(R_inv, R);
+
+              const inst_invCanon = mat4.create();
+              mat4.multiply(inst_invCanon, cand.invCanonicalMatrix, R_inv);
+              dedupeMap.set(cand, { base: base, T_inv: inst_invCanon });
+              matched = true; break;
+           }
+        }
+        if (matched) break;
+      }
+
+      if (!matched) {
+        // Cache spatial hash for this new base object
+        this.buildSpatialHash(cand, 0.04);
+        dedupeMap.set(cand, { base: cand, T_inv: cand.invCanonicalMatrix });
+        cand.generateBVH();
+        bases.push(cand);
+      }
+    }
+
+    return dedupeMap;
+  }
+
+  testTransform(base, cand, transform, tolerance) {
+    const cPos = cand.vertex_positions;
+    
+    // Winding-Order Agnostic Test
+    // Using up to 600 vertices distributed across the mesh
+    const testCount = Math.min(600, cPos.length / 3);
+    const step = Math.max(1, Math.floor((cPos.length / 3) / testCount));
+    
+    let matchCount = 0;
+    let actualTests = 0;
+    const invTol = 1.0 / tolerance;
+    const tolSq = tolerance * tolerance;
+
+    for (let i = 0; i < cPos.length / 3; i += step) {
+        actualTests++;
+        const idx = i * 3;
+        
+        const v = vec3.fromValues(cPos[idx], cPos[idx+1], cPos[idx+2]);
+        vec3.transformMat4(v, v, transform);
+        
+        const cx = Math.round(v[0] * invTol);
+        const cy = Math.round(v[1] * invTol);
+        const cz = Math.round(v[2] * invTol);
+        
+        let found = false;
+        // Search 3x3x3 neighboring hash cells
+        for (let ox = -1; ox <= 1 && !found; ox++) {
+            for (let oy = -1; oy <= 1 && !found; oy++) {
+                for (let oz = -1; oz <= 1 && !found; oz++) {
+                    const hash = `${cx+ox}_${cy+oy}_${cz+oz}`;
+                    if (base.spatialHash.has(hash)) {
+                        const pts = base.spatialHash.get(hash);
+                        for (let pt of pts) {
+                            const dx = pt[0]-v[0], dy = pt[1]-v[1], dz = pt[2]-v[2];
+                            if (dx*dx+dy*dy+dz*dz <= tolSq) {
+                                found = true; break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (found) matchCount++;
+    }
+    
+    // Pass if 85% of vertices match (forgives decimation/float shimmers while rejecting totally different meshes)
+    return (matchCount / actualTests) >= 0.85;
+  }
+
+  // ... computeAllWorldMatrices, processMesh, normalizeScene, getBufferData, createMaterial, collectAssets remain functionally identical ...
 
   computeAllWorldMatrices(json) {
     const worldMatrices = new Array(json.nodes.length).fill(null);
@@ -1388,23 +1759,25 @@ class GLTFLoader {
 
   async processMesh(meshMetadata, json, internalBinary) {
     const primitiveModels = [];
-    for (const primitive of meshMetadata.primitives) {
-      const modelData = new ModelData(meshMetadata.name || "Mesh");
+    for (let primIdx = 0; primIdx < meshMetadata.primitives.length; primIdx++) {
+      const primitive = meshMetadata.primitives[primIdx];
+      const rawModelData = new ModelData(meshMetadata.name || "Mesh");
+      rawModelData.sourcePrimIdx = primIdx; 
       
-      modelData.vertex_positions = await this.getBufferData(primitive.attributes.POSITION, json, internalBinary);
+      rawModelData.vertex_positions = await this.getBufferData(primitive.attributes.POSITION, json, internalBinary);
       const normals = await this.getBufferData(primitive.attributes.NORMAL, json, internalBinary);
       const uvs = await this.getBufferData(primitive.attributes.TEXCOORD_0, json, internalBinary);
       const indices = await this.getBufferData(primitive.indices, json, internalBinary);
 
-      if (normals) modelData.vertex_normals = new Float32Array(normals);
-      if (uvs) modelData.vertex_texcoords = new Float32Array(uvs);
+      if (normals) rawModelData.vertex_normals = new Float32Array(normals);
+      if (uvs) rawModelData.vertex_texcoords = new Float32Array(uvs);
       
-      modelData.index_positions = indices instanceof Uint16Array ? new Uint32Array(indices) : indices;
-      modelData.index_normals = new Uint32Array(modelData.index_positions);
-      modelData.index_texcoords = new Uint32Array(modelData.index_positions);
+      rawModelData.index_positions = indices instanceof Uint16Array ? new Uint32Array(indices) : indices;
+      rawModelData.index_normals = new Uint32Array(rawModelData.index_positions);
+      rawModelData.index_texcoords = new Uint32Array(rawModelData.index_positions);
 
-      modelData.generateBVH();
-      primitiveModels.push(modelData);
+      const splits = this.splitDisconnected(rawModelData);
+      primitiveModels.push(...splits);
     }
     return primitiveModels;
   }
@@ -1415,59 +1788,53 @@ class GLTFLoader {
     let min = [Infinity, Infinity, Infinity];
     let max = [-Infinity, -Infinity, -Infinity];
 
-    // 1. Calculate Global Bounding Box
     instances.forEach(inst => {
-      const positions = inst.model.vertex_positions;
       const worldMat = mat4.create();
-      mat4.invert(worldMat, inst.invMatrix); // Get world matrix back from inverse
+      mat4.invert(worldMat, inst.invMatrix); 
 
-      for (let i = 0; i < positions.length; i += 3) {
-        const v = vec3.fromValues(positions[i], positions[i+1], positions[i+2]);
-        vec3.transformMat4(v, v, worldMat);
+      const bMin = inst.model.canonicalMin || [-1, -1, -1];
+      const bMax = inst.model.canonicalMax || [1, 1, 1];
 
-        for (let j = 0; j < 3; j++) {
-          min[j] = Math.min(min[j], v[j]);
-          max[j] = Math.max(max[j], v[j]);
+      for (let x of [bMin[0], bMax[0]]) {
+        for (let y of [bMin[1], bMax[1]]) {
+          for (let z of [bMin[2], bMax[2]]) {
+            const v = vec3.fromValues(x, y, z);
+            vec3.transformMat4(v, v, worldMat);
+            for (let j = 0; j < 3; j++) {
+              min[j] = Math.min(min[j], v[j]);
+              max[j] = Math.max(max[j], v[j]);
+            }
+          }
         }
       }
     });
 
-    // 2. Calculate Scale
     const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
     const maxDim = Math.max(size[0], size[1], size[2]);
-    const scaleFactor = Math.min(Math.max(maxDim,0.5),50) / maxDim;
+    const scaleFactor = Math.min(Math.max(maxDim, 0.5), 50) / (maxDim || 1);
 
-    // 3. Calculate Translation (Center X/Z, Bottom Y at 0)
     const centerX = (min[0] + max[0]) / 2;
     const centerZ = (min[2] + max[2]) / 2;
-    const bottomY = min[1];
+    const bottomY = min[1]; 
 
     const globalTransform = mat4.create();
-    // We want: Final = Scale * TranslationToOrigin
     mat4.scale(globalTransform, globalTransform, [scaleFactor, scaleFactor, scaleFactor]);
     mat4.translate(globalTransform, globalTransform, [-centerX, -bottomY, -centerZ]);
 
-    // 4. Apply to all instances
     instances.forEach(inst => {
       const currentWorld = mat4.create();
       mat4.invert(currentWorld, inst.invMatrix);
       
-      // Target World = Normalization * CurrentWorld
       const newWorld = mat4.create();
       mat4.multiply(newWorld, globalTransform, currentWorld);
 
-      // Decompose the matrix back into your object components
-      // Assuming inst has .position (vec3), .rotation (quat), .scale (vec3)
-      if (!inst.position) inst.position = vec3.create();
-      if (!inst.rotation) inst.rotation = quat.create();
-      if (!inst.scale) inst.scale = vec3.create();
-
-      mat4.getTranslation(inst.position, newWorld);
-      mat4.getRotation(inst.rotation, newWorld);
-      mat4.getScaling(inst.scale, newWorld);
-
-      // Sync the invMatrix used by the renderer/BVH to the new state
-      mat4.invert(inst.invMatrix, newWorld);
+      if (mat4.invert(inst.invMatrix, newWorld)) {
+        mat4.getTranslation(inst.position, newWorld);
+        mat4.getRotation(inst.rotation, newWorld);
+        mat4.getScaling(inst.scale, newWorld);
+      } else {
+        mat4.identity(inst.invMatrix);
+      }
     });
   }
 
@@ -1481,18 +1848,41 @@ class GLTFLoader {
     if (!buffer.uri) {
       bin = internalBinary;
     } else {
-      const blobUrl = this.resolveUri(buffer.uri); // Use resolver here
+      const blobUrl = this.resolveUri(buffer.uri); 
       const res = await fetch(blobUrl);
       bin = await res.arrayBuffer();
     }
 
     const offset = (view.byteOffset || 0) + (acc.byteOffset || 0);
     const stride = view.byteStride || 0; 
-    const count = acc.count * (acc.type === 'VEC3' ? 3 : acc.type === 'VEC2' ? 2 : 1);
     
-    if (acc.componentType === 5126) return new Float32Array(bin, offset, count);
-    if (acc.componentType === 5123) return new Uint16Array(bin, offset, acc.count);
-    if (acc.componentType === 5125) return new Uint32Array(bin, offset, acc.count);
+    const numComponents = acc.type === 'VEC4' ? 4 : acc.type === 'VEC3' ? 3 : acc.type === 'VEC2' ? 2 : 1;
+    const totalElements = acc.count * numComponents;
+    const componentSize = (acc.componentType === 5126 || acc.componentType === 5125) ? 4 : acc.componentType === 5123 ? 2 : 1;
+    const defaultStride = numComponents * componentSize;
+
+    if (stride === 0 || stride === defaultStride) {
+      if (acc.componentType === 5126) return new Float32Array(bin, offset, totalElements);
+      if (acc.componentType === 5123) return new Uint16Array(bin, offset, totalElements);
+      if (acc.componentType === 5125) return new Uint32Array(bin, offset, totalElements);
+    } else {
+      const dataView = new DataView(bin);
+      let result;
+      if (acc.componentType === 5126) result = new Float32Array(totalElements);
+      else if (acc.componentType === 5123) result = new Uint16Array(totalElements);
+      else if (acc.componentType === 5125) result = new Uint32Array(totalElements);
+
+      for (let i = 0; i < acc.count; i++) {
+        const byteIndex = offset + (i * stride);
+        for (let j = 0; j < numComponents; j++) {
+          const flatIndex = (i * numComponents) + j;
+          if (acc.componentType === 5126) result[flatIndex] = dataView.getFloat32(byteIndex + (j * 4), true); 
+          else if (acc.componentType === 5123) result[flatIndex] = dataView.getUint16(byteIndex + (j * 2), true);
+          else if (acc.componentType === 5125) result[flatIndex] = dataView.getUint32(byteIndex + (j * 4), true);
+        }
+      }
+      return result;
+    }
     return null;
   }
 
@@ -1505,28 +1895,19 @@ class GLTFLoader {
       roughness: pbr.roughnessFactor ?? 1.0,
       ior: ext.KHR_materials_ior?.ior ?? 1.5,
       transmission: ext.KHR_materials_transmission?.transmissionFactor ?? 0.0,
-      
-      // Clearcoat
       clearcoat: ext.KHR_materials_clearcoat?.clearcoatFactor ?? 0.0,
       clearcoatGloss: 1.0 - (ext.KHR_materials_clearcoat?.clearcoatRoughnessFactor ?? 0.0),
-      clearcoatIor: 1.5, // Standard fallback
-      
-      // Sheen
+      clearcoatIor: 1.5,
       sheen: ext.KHR_materials_sheen?.sheenColorFactor ? 1.0 : 0.0,
       sheenTint: 0.5,
-      
-      // Specular/Disney Tint
       specularTint: ext.KHR_materials_specular?.specularColorFactor ? 1.0 : 0.0,
-      
-      // Emission
       emittance: gltfMat.emissiveFactor || [0, 0, 0],
       emissionIntensity: ext.KHR_materials_emissive_strength?.emissiveStrength ?? 1.0,
     };
 
     const baseColor = pbr.baseColorFactor ? [pbr.baseColorFactor[0], pbr.baseColorFactor[1], pbr.baseColorFactor[2]] : [1, 1, 1];
-
-    // Map Textures
     var name = gltfMat.name || "GLB_Mat";
+
     if (pbr.baseColorTexture) options.albedoTex = this.extractTexture(pbr.baseColorTexture.index, json, bin, name+"_baseColor");
     if (gltfMat.normalTexture) options.normalTex = this.extractTexture(gltfMat.normalTexture.index, json, bin, name+"_normal");
     if (pbr.metallicRoughnessTexture) options.roughnessTex = options.metallicTex = this.extractTexture(pbr.metallicRoughnessTexture.index, json, bin, name+"_metallicRoughness");
@@ -1545,7 +1926,7 @@ class GLTFLoader {
       const blob = new Blob([new Uint8Array(bin, view.byteOffset, view.byteLength)], { type: image.mimeType });
       url = URL.createObjectURL(blob);
     } else if (image.uri) {
-      url = this.resolveUri(image.uri); // Use resolver here
+      url = this.resolveUri(image.uri); 
     }
 
     const tex = new Texture(url, name);
