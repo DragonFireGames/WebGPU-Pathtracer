@@ -2012,7 +2012,7 @@ fn sample_surface(ray: ptr<function, Ray>, throughput: ptr<function, vec3f>, rad
   return true; 
 }
 
-const FIREFLY_CLAMP: f32 = 5.0; 
+const FIREFLY_CLAMP: f32 = 20.0; 
 
 fn clamp_firefly(rad: vec3f, bounce: i32) -> vec3f {
   // NEVER clamp the primary ray (bounce == 0), otherwise 
@@ -2099,6 +2099,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var throughput = vec3f(1.0);
   var radiance = vec3f(0.0);
   var last_surface_pdf = 1.0; 
+  var last_weight_sum = 0.0;
   
   // Initialize the empty stack (Defaults to Air implicitly)
   var stack: MediumStack;
@@ -2165,15 +2166,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // --- IMPLICIT LIGHT HIT (BSDF Bounce) ---
     if (length(ctx.emittance) > 0.0) {
       var weight = 1.0;
-      if (HAS_LIGHTS && bounce > 0 && hit.o_idx > 0 && obj.light_idx >= 0) {
+      if (HAS_LIGHTS && bounce > 0 && hit.o_idx >= 0 && obj.light_idx >= 0) {
         let light = lights[obj.light_idx];
-        let light_pdf = get_light_pdf(light, obj, ray.origin, ray.direction) / f32(arrayLength(&lights));
-        weight = mis_weight(last_surface_pdf, light_pdf);
+        let raw_light_pdf = get_light_pdf(light, obj, ray.origin, ray.direction);
+        let to_light = obj.world_position - ray.origin;
+        let d2 = max(dot(to_light, to_light), 0.001);
+        let light_importance = light.power / d2;
+        let selection_pdf = select(0.0, light_importance / last_weight_sum, last_weight_sum > 0.0);
+        let total_light_pdf = raw_light_pdf * selection_pdf;
+        weight = mis_weight(last_surface_pdf, total_light_pdf);
       }
-      
       let incoming = ctx.emittance.rgb * weight;
       radiance += throughput * clamp_firefly(incoming, bounce);
-      
       if (HAS_LIGHTS && hit.o_idx > 0 && obj.light_idx >= 0) { break; }
       else if (length(ctx.emittance) > 1.0) { break; }
     }
@@ -2225,6 +2229,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
           radiance += throughput * clamp_firefly(incoming, bounce);
         }
       }
+
+      last_weight_sum = weight_sum; 
     }
 
     // --- DIRECT SKY SAMPLING (NEE) ---
