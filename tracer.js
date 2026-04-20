@@ -57,18 +57,12 @@ class HDRTexture {
       const arrayBuffer = await response.arrayBuffer();
       // parse-hdr expects a Uint8Array
       const hdr = parseHdr(new Uint8Array(arrayBuffer));
+      this.hdrData = hdr.data;
       
       this.width = hdr.shape[0];
       this.height = hdr.shape[1];
       
-      // Convert RGB (3 floats) to RGBA (4 floats) for WebGPU compatibility
-      this.data = new Float16Array(this.width * this.height * 4);
-      for (let i = 0; i < this.width * this.height; i++) {
-        this.data[i * 4 + 0] = Math.min(hdr.data[i * 4 + 0] * this.exposure, this.threshold);
-        this.data[i * 4 + 1] = Math.min(hdr.data[i * 4 + 1] * this.exposure, this.threshold);
-        this.data[i * 4 + 2] = Math.min(hdr.data[i * 4 + 2] * this.exposure, this.threshold);
-        this.data[i * 4 + 3] = 1.0; // Alpha channel
-      }
+      this.updateData();
       return this;
     } catch (err) {
       console.error("Failed to load HDR:", url, err);
@@ -76,6 +70,19 @@ class HDRTexture {
       this.width = 1; this.height = 1;
       this.data = new Float16Array([0.01, 0, 0, 1]);
       return this;
+    }
+  }
+
+  async updateData() {
+    const hdrData = this.hdrData;
+    if (!hdrData) return;
+    // Convert RGB (3 floats) to RGBA (4 floats) for WebGPU compatibility
+    this.data = new Float16Array(this.width * this.height * 4);
+    for (let i = 0; i < this.width * this.height; i++) {
+      this.data[i * 4 + 0] = Math.min(hdrData[i * 4 + 0] * this.exposure, this.threshold);
+      this.data[i * 4 + 1] = Math.min(hdrData[i * 4 + 1] * this.exposure, this.threshold);
+      this.data[i * 4 + 2] = Math.min(hdrData[i * 4 + 2] * this.exposure, this.threshold);
+      this.data[i * 4 + 3] = 1.0; // Alpha channel
     }
   }
   
@@ -1707,6 +1714,8 @@ class Renderer {
     this.sceneBvh = new SceneBVHBuilder();
     this.frame = 0;
     this.currentFlags = {};
+    this.section = { x: 0, y: 0, width: 16, height: 16 };
+    this.scale = { width: 16, height: 16 };
   }
   
   async init() {
@@ -1743,7 +1752,7 @@ class Renderer {
     context.configure({ 
       device: this.device, 
       format: 'rgba8unorm', 
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST,
       alphaMode: 'premultiplied', 
     });
   }
@@ -2013,7 +2022,7 @@ class Renderer {
       marg: makeBuf(margCDF,4),
     };
 
-    this.uBuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.uBuf = device.createBuffer({ size: 28 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     
     console.log("Created Buffers");
 
@@ -2149,7 +2158,7 @@ class Renderer {
     this.tex = this.device.createTexture({
       size: [width, height],
       format: 'rgba8unorm',
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT
     });
 
     // 4. Recreate the Accumulation Buffer (The 16-byte-per-pixel float buffer)
@@ -2177,17 +2186,17 @@ class Renderer {
     const cam = this.scene.camera;
     cam.updateRays2();
     var randomSeed = Math.floor(Math.random() * 0xFFFFFFFF);
-    const uData = new Float32Array(24);
+    const uData = new Float32Array(28);
     const uView = new DataView(uData.buffer);
 
     uData.set(cam.jitteredPosition, 0);
     uView.setUint32(3*4, this.frame, true);
 
     uData.set(cam.ray00, 4); 
-    uView.setUint32(7*4, canvas.width, true);
+    uView.setUint32(7*4, this.size.width, true);
 
     uData.set(cam.ray10, 8);
-    uView.setUint32(11*4, canvas.height, true);
+    uView.setUint32(11*4, this.size.height, true);
 
     uData.set(cam.ray01, 12); 
     uView.setFloat32(15*4, cam.exposure, true);
@@ -2199,22 +2208,56 @@ class Renderer {
     uView.setUint32(21*4, this.skyboxData.height, true);
     uView.setFloat32(22*4, this.skyboxData.total_lum, true);
     uView.setFloat32(23*4, this.totalLightPower, true);
+    uView.setUint32(24*4, this.section.x, true);
+    uView.setUint32(25*4, this.section.y, true);
 
     device.queue.writeBuffer(uBuf, 0, uData);
   }
-  
-  async render() {
+
+  async render(tsize=256,reps=1,tilesVisible=false) {
     if (!this.scene) return;
-    const { canvas, context, device, bG, pipe, tex } = this;
-    this.updateUniforms();
-    
-    const enc = device.createCommandEncoder();
-    const pass = enc.beginComputePass();
-    pass.setPipeline(pipe); 
-    pass.setBindGroup(0, bG);
-    pass.dispatchWorkgroups(Math.ceil(canvas.width / 16), Math.ceil(canvas.height / 16));
-    pass.end();
-    
+    const { canvas, context, device, tex } = this;
+
+    var enc = device.createCommandEncoder();
+
+    const startingFrame = this.frame;
+    const FRAME_REPS = reps;//this.frame < 16 ? 1 : 16;
+
+    const TILE_SIZE = tsize;
+    const tilesX = Math.ceil(canvas.width / TILE_SIZE);
+    const tilesY = Math.ceil(canvas.height / TILE_SIZE);
+
+    this.size = { width: canvas.width, height: canvas.height };
+
+    for (let y = 0; y < tilesY; y++) {
+      for (let x = 0; x < tilesX; x++) {
+        // 1. Calculate the actual pixel bounds for this tile
+        const left = x * TILE_SIZE;
+        const top = y * TILE_SIZE;
+        // Handle the "remainder" pixels at the edges of the canvas
+        const width = Math.min(TILE_SIZE, canvas.width - left);
+        const height = Math.min(TILE_SIZE, canvas.height - top);
+        
+        this.section = { 
+          x: left, 
+          y: top, 
+          width: width, 
+          height: height 
+        };
+
+        for (var i = 0; i < FRAME_REPS; i++) {
+          this.frame = startingFrame + i;
+          this.renderSection(enc);
+        }
+
+        if (tilesVisible) enc.copyTextureToTexture({ texture: tex }, { texture: context.getCurrentTexture() }, [canvas.width, canvas.height]);
+
+        device.queue.submit([enc.finish()]);
+        await device.queue.onSubmittedWorkDone();
+        enc = device.createCommandEncoder();
+      }
+    }
+
     // if (this.frame < 10 
     //   || (this.frame < 100 && this.frame % 5 == 0)
     //   || (this.frame < 1000 && this.frame % 25 == 0)
@@ -2225,6 +2268,137 @@ class Renderer {
 
     await device.queue.onSubmittedWorkDone();
     
+    this.frame = startingFrame + FRAME_REPS;
+  }
+  
+  renderSection(enc) {
+    const { bG, pipe } = this;
+    
+    this.updateUniforms();
+    
+    const pass = enc.beginComputePass();
+    pass.setPipeline(pipe);
+    pass.setBindGroup(0, bG);
+    pass.dispatchWorkgroups(Math.ceil(this.section.width / 16), Math.ceil(this.section.height / 16));
+    pass.end();
+  }
+
+  initPreview() {
+    const { device } = this;
+    const canvasFormat = 'rgba8unorm'; 
+
+    this.targetFrameTime = 1000/5; // 16.6ms for 60 FPS
+    this.currentPreviewSize = 128;    // Start size
+    this.lastFrameTime = performance.now();
+    
+    const scaleShader = `
+      @group(0) @binding(0) var src: texture_2d<f32>;
+      @group(0) @binding(1) var dest: texture_storage_2d<${canvasFormat}, write>;
+      @group(0) @binding(2) var<uniform> ratio: vec2f;
+
+      @compute @workgroup_size(16, 16)
+      fn main(@builtin(global_invocation_id) id: vec3u) {
+        let dstSize = textureDimensions(dest);
+        if (id.x >= dstSize.x || id.y >= dstSize.y) { return; }
+
+        let srcSize = vec2f(textureDimensions(src));
+        
+        // Calculate continuous coordinates in the source texture
+        let uv = vec2f(id.xy) / vec2f(dstSize);
+        let samplePos = uv * ratio * srcSize - 0.5;
+        
+        // Get the integer coordinates of the 4 neighbors
+        let f = fract(samplePos);
+        let base = vec2i(floor(samplePos));
+
+        // Fetch 4 neighboring pixels (clamped to prevent edge bleeding)
+        let t00 = textureLoad(src, clamp(base + vec2i(0, 0), vec2i(0), vec2i(srcSize) - 1), 0);
+        let t10 = textureLoad(src, clamp(base + vec2i(1, 0), vec2i(0), vec2i(srcSize) - 1), 0);
+        let t01 = textureLoad(src, clamp(base + vec2i(0, 1), vec2i(0), vec2i(srcSize) - 1), 0);
+        let t11 = textureLoad(src, clamp(base + vec2i(1, 1), vec2i(0), vec2i(srcSize) - 1), 0);
+
+        // Bilinear interpolation math
+        let color = mix(
+          mix(t00, t10, f.x),
+          mix(t01, t11, f.x),
+          f.y
+        );
+        
+        textureStore(dest, id.xy, vec4f(color.rgb, 1.0));
+      }
+    `;
+
+    this.blitScaleBuf = device.createBuffer({
+      size: 8,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+
+    this.blitPipe = device.createComputePipeline({
+      layout: 'auto',
+      compute: {
+        module: device.createShaderModule({ code: scaleShader }),
+        entryPoint: 'main'
+      }
+    });
+  }
+
+  async renderPreview() {
+    const { device, canvas, context, tex } = this;
+    
+    if (this.frame < 16) {
+      // 1. MEASURE PERFORMANCE
+      const now = performance.now();
+      const frameTime = now - this.lastFrameTime;
+      this.lastFrameTime = now;
+
+      // 2. ADJUST SIZE (Adaptive Logic)
+      var newPrev = this.currentPreviewSize;
+      const perfRatio = this.targetFrameTime / frameTime;
+      const adjustment = (perfRatio - 1.0) * 20;
+      newPrev += adjustment;
+      const maxPossible = Math.max(canvas.width, canvas.height);
+      newPrev = Math.min(maxPossible, Math.max(64, newPrev));
+      if (Math.abs(this.currentPreviewSize - newPrev) > 4) {
+        this.currentPreviewSize = newPrev;
+        this.frame = 0; 
+      }
+    }
+
+    const maxsize = Math.floor(this.currentPreviewSize);
+    const scale = Math.min(maxsize / canvas.width, maxsize / canvas.height);
+    const pWidth = Math.floor(canvas.width * scale);
+    const pHeight = Math.floor(canvas.height * scale);
+
+    // ... Rest of your render logic exactly as before using pWidth/pHeight ...
+    this.size = { width: pWidth, height: pHeight };
+    this.section = { x: 0, y: 0, width: pWidth, height: pHeight };
+    
+    const ratio = new Float32Array([pWidth / canvas.width, pHeight / canvas.height]);
+    device.queue.writeBuffer(this.blitScaleBuf, 0, ratio);
+
+    let enc = device.createCommandEncoder();
+    this.renderSection(enc);
+    device.queue.submit([enc.finish()]);
+
+    enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    const scaleBG = device.createBindGroup({
+      layout: this.blitPipe.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: tex.createView() },
+        { binding: 1, resource: context.getCurrentTexture().createView() },
+        { binding: 2, resource: { buffer: this.blitScaleBuf } }
+      ]
+    });
+
+    pass.setPipeline(this.blitPipe);
+    pass.setBindGroup(0, scaleBG);
+    pass.dispatchWorkgroups(Math.ceil(canvas.width / 16), Math.ceil(canvas.height / 16));
+    pass.end();
+
+    device.queue.submit([enc.finish()]);
+    await device.queue.onSubmittedWorkDone();
+
     this.frame++;
   }
 

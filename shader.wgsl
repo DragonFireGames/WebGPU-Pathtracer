@@ -26,6 +26,8 @@ struct SceneParams {
   sky_height: u32,
   sky_total_lum: f32,
   total_light_power: f32,
+  section: vec2u,
+  pad0: vec2f,
 };
 
 struct Material {
@@ -1552,9 +1554,12 @@ fn light_box_pdf(light: Light, obj: TransformedObject, hit_pos: vec3f, ray_dir: 
 
   // Re-calculate the same total area used in sampling
   let d = cen - hit_pos;
-  let a1 = length(cross(v2 * 2.0, v3 * 2.0));
-  let a2 = length(cross(v1 * 2.0, v3 * 2.0));
-  let a3 = length(cross(v1 * 2.0, v2 * 2.0));
+  let s1 = select(-1.0, 1.0, dot(d, v1) < 0.0);
+  let s2 = select(-1.0, 1.0, dot(d, v2) < 0.0);
+  let s3 = select(-1.0, 1.0, dot(d, v3) < 0.0);
+  let a1 = length(cross(v2 * 2.0, v3 * 2.0))*max(dot(normalize(-d), normalize(v1 * s1)),0.01);
+  let a2 = length(cross(v1 * 2.0, v3 * 2.0))*max(dot(normalize(-d), normalize(v2 * s2)),0.01);
+  let a3 = length(cross(v1 * 2.0, v2 * 2.0))*max(dot(normalize(-d), normalize(v3 * s3)),0.01);
   let total_area = a1 + a2 + a3;
 
   // We need the normal of the specific face we hit to calculate cos_l
@@ -1579,9 +1584,9 @@ fn sample_light_box(light: Light, obj: TransformedObject, hit_pos: vec3f, xi: ve
   let s3 = select(-1.0, 1.0, dot(d, v3) < 0.0);
 
   // Areas of visible faces (scaled by 2 because box is -1 to 1)
-  let a1 = length(cross(v2 * 2.0, v3 * 2.0));
-  let a2 = length(cross(v1 * 2.0, v3 * 2.0));
-  let a3 = length(cross(v1 * 2.0, v2 * 2.0));
+  let a1 = length(cross(v2 * 2.0, v3 * 2.0))*max(dot(normalize(-d), normalize(v1 * s1)),0.01);
+  let a2 = length(cross(v1 * 2.0, v3 * 2.0))*max(dot(normalize(-d), normalize(v2 * s2)),0.01);
+  let a3 = length(cross(v1 * 2.0, v2 * 2.0))*max(dot(normalize(-d), normalize(v3 * s3)),0.01);
   let total_area = a1 + a2 + a3;
 
   var p = cen;
@@ -2181,17 +2186,68 @@ fn clamp_firefly(rad: vec3f, bounce: i32) -> vec3f {
   return rad;
 }
 
-fn evaluate_nee(light_sample: LightSample, hit_pos: vec3f, n_orient: vec3f, V: vec3f, mat: Material, ctx: SurfaceContext, tbn: mat3x3f, currentheight: f32, final_uv: vec2f, stack: ptr<function, MediumStack>, ignore_obj_idx: i32) -> vec3f {
+// fn evaluate_nee(light_sample: LightSample, hit_pos: vec3f, n_orient: vec3f, V: vec3f, mat: Material, ctx: SurfaceContext, tbn: mat3x3f, currentheight: f32, final_uv: vec2f, stack: ptr<function, MediumStack>, ignore_obj_idx: i32) -> vec3f {
+//   if (light_sample.pdf <= 0.0) { return vec3f(0.0); }
+  
+//   let dotNL = dot(n_orient, light_sample.dir);
+//   if (dotNL <= 0.0 && mat.transmission <= 0.0) { return vec3f(0.0); } 
+
+//   // Offset using n_orient since it already faces the incoming ray
+//   let ray_offset = select(n_orient * 0.001, -n_orient * 0.001, dotNL < 0.0);
+//   let shadow_ray = Ray(hit_pos + ray_offset, light_sample.dir);
+//   var in_shadow = false;
+//   var sample_color = light_sample.color;
+
+//   if (HAS_HEIGHTMAPS && mat.height_idx >= 0) {
+//     let light_ts = normalize(transpose(tbn) * light_sample.dir);
+//     let shadow_res = calculate_shadow_pom(final_uv, currentheight, light_ts, mat, mat.height_idx);
+//     if (shadow_res.hit) { in_shadow = true; }
+//   }
+  
+//   if (!in_shadow) {
+//     let shadow_hit = trace_scene_shadow(shadow_ray, ignore_obj_idx, light_sample.dist);
+//     sample_color *= shadow_hit;
+//     if (max_component(shadow_hit) < 0.001) { in_shadow = true; }
+//   }
+
+//   if (!in_shadow) {
+//     let bsdf_pdf = pdf_surface(V, light_sample.dir, mat, ctx, stack);  
+//     let weight = mis_weight(light_sample.pdf, bsdf_pdf);
+//     let bsdf_val = eval_surface(V, light_sample.dir, mat, ctx, stack); 
+    
+//     return (sample_color * bsdf_val * weight) / max(light_sample.pdf, 1e-6);
+//   }
+  
+//   return vec3f(0.0);
+// }
+
+fn evaluate_nee(light_sample: LightSample, hit_pos: vec3f, n_orient: vec3f, V: vec3f, mat: Material, ctx: SurfaceContext, tbn: mat3x3f, currentheight: f32, final_uv: vec2f, stack: ptr<function, MediumStack>, ignore_obj_idx: i32, bounce: i32) -> vec3f {
   if (light_sample.pdf <= 0.0) { return vec3f(0.0); }
   
   let dotNL = dot(n_orient, light_sample.dir);
   if (dotNL <= 0.0 && mat.transmission <= 0.0) { return vec3f(0.0); } 
 
+  let bsdf_pdf = pdf_surface(V, light_sample.dir, mat, ctx, stack);  
+  var weight = mis_weight(light_sample.pdf, bsdf_pdf);
+  let bsdf_val = eval_surface(V, light_sample.dir, mat, ctx, stack); 
+  var sample_color = light_sample.color;
+  
+  // luma(throughput*contrib)*1/(1+(p_brdf/(p_light*p_survival))^2)=p_survival
+  // 
+  // if (bounce > 0) {
+  //   let survival_prob = clamp(weight, 0.05, 1);
+  //   if (rand_pcg() > survival_prob) { return vec3f(0.0); }
+  //   weight /= survival_prob;
+  // }
+
+  var c_weight = weight * bsdf_val / max(light_sample.pdf, 1e-6);
+  
+  if (max_component(sample_color * c_weight) < 1e-5) { return vec3f(0.0); }
+
   // Offset using n_orient since it already faces the incoming ray
   let ray_offset = select(n_orient * 0.001, -n_orient * 0.001, dotNL < 0.0);
   let shadow_ray = Ray(hit_pos + ray_offset, light_sample.dir);
   var in_shadow = false;
-  var sample_color = light_sample.color;
 
   if (HAS_HEIGHTMAPS && mat.height_idx >= 0) {
     let light_ts = normalize(transpose(tbn) * light_sample.dir);
@@ -2206,18 +2262,15 @@ fn evaluate_nee(light_sample: LightSample, hit_pos: vec3f, n_orient: vec3f, V: v
   }
 
   if (!in_shadow) {
-    let bsdf_pdf = pdf_surface(V, light_sample.dir, mat, ctx, stack);  
-    let weight = mis_weight(light_sample.pdf, bsdf_pdf);
-    let bsdf_val = eval_surface(V, light_sample.dir, mat, ctx, stack); 
-    
-    return (sample_color * bsdf_val * weight) / max(light_sample.pdf, 1e-6);
+    return sample_color * c_weight;
   }
   
   return vec3f(0.0);
 }
 
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) id: vec3u) {
+fn main(@builtin(global_invocation_id) sid: vec3u) {
+  let id = params.section + sid.xy;
   if (id.x >= params.width || id.y >= params.height) { return; }
   let idx = id.y * params.width + id.x;
   
@@ -2382,7 +2435,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
           let selection_pdf = selected_weight / weight_sum;
           light_sample.pdf *= selection_pdf;
           
-          let incoming = evaluate_nee(light_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, light.obj_idx);
+          let incoming = evaluate_nee(light_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, light.obj_idx, bounce);
           radiance += throughput * clamp_firefly(incoming, bounce);
         }
       }
@@ -2393,7 +2446,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // --- DIRECT SKY SAMPLING (NEE) ---
     if (HAS_SKYBOX && MIS_SKYBOX) {
       var env_sample = sample_env_cdf(vec2f(rand_pcg(), rand_pcg()));
-      let incoming = evaluate_nee(env_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, -1);
+      let incoming = evaluate_nee(env_sample, hit_pos, n_orient, V, mat, ctx, tbn, currentheight, final_uv, &stack, -1, bounce);
       radiance += throughput * clamp_firefly(incoming, bounce);
     }
     

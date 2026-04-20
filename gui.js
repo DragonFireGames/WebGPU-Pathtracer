@@ -1026,7 +1026,7 @@ const createAssetSlot = (guiFolder, label, assetType, assetParent, assetPath) =>
     if (assetParent[assetPath]) selectAsset(assetParent[assetPath]);
   }
   guiFolder.domElement.children[1].appendChild(slot);
-  slot.onChange = e => slot.changeListener = e;
+  slot.onChange = e => { slot.changeListener = e; return slot; };
   return slot;
 };
 
@@ -1069,7 +1069,7 @@ const renderInspector = () => {
       //geo.add(n, 'radiusBottom', 0.0, 5).name('Bottom Radius').onChange(onGeoUpdate);
       //geo.add(n, 'height', 0.1, 10).name('Height').onChange(onGeoUpdate);
     } else if (n instanceof Model) {
-      createAssetSlot(geo, "Drop Model Asset Here", ModelData, n, 'model');
+      createAssetSlot(geo, "Drop Model Asset Here", ModelData, n, 'model').onChange(onGeoUpdate);
     } else {
       //geo.domElement.innerHTML += '<div style="padding:10px; color:#666; font-size:10px">Standard Cube (No Params)</div>';
     }
@@ -1077,7 +1077,7 @@ const renderInspector = () => {
     const m = gui.addFolder('Material');
     var mslot;
     if (State.scene.lightPower(n).power > 0) m.add(n, 'enableNEE').name('Enable Emissive Next Event Estimation');
-    n.removeMaterial = ()=>{ n.material = defaultMaterial; mslot.textContent = "None (Default) - Drop Material"; }
+    n.removeMaterial = ()=>{ n.material = defaultMaterial; mslot.textContent = "None (Default) - Drop Material"; renderList(); }
     m.add(n, 'removeMaterial').name('Remove Material');
     mslot = createAssetSlot(m, "None (Default) - Drop Material", Material, n, 'material');
 
@@ -1218,8 +1218,7 @@ const renderSceneInspector = () => {
   var bslot;
   a.removeBackground = ()=>{ a.background = null; bslot.textContent = "Drop HDR Texture Here"; }
   bgt.add(a, 'removeBackground').name('Remove Texture');
-  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background');
-  bslot.onChange(()=>{ State.backgroundColor = [1,1,1]; });
+  bslot = createAssetSlot(bgt, "Drop HDR Texture Here", HDRTexture, a, 'background').onChange(()=>{ State.backgroundColor = [1,1,1]; });
 }
 // Canvas Drop for Models & Materials
 gl_canvas.ondragover = e => e.preventDefault();
@@ -1409,6 +1408,15 @@ window.exportCurrentScene = async () => {
   await exporter.exportScene(State.scene.objects, "Scene.glb");
 };
 
+var assetList = document.getElementById('asset-list');
+assetList.addEventListener('dragover', (e) => {
+  e.preventDefault(); // Required to allow a drop
+});
+assetList.addEventListener('drop', (e) => {
+  e.preventDefault();
+  window.handleUpload(e.dataTransfer);
+});
+
 const ctxMenu = document.getElementById('context-menu');
 document.getElementById("ctx-add-animation").onclick = () => {
   if (State.selected) {
@@ -1563,7 +1571,7 @@ document.querySelectorAll(".panel-tab").forEach((tab) => {
 });
 
 var renderActive = null;
-async function loop() { 
+async function loop() {
   if (renderActive) {
     await renderActive();
   } else {
@@ -1577,7 +1585,7 @@ async function loop() {
 const initNode = State.scene.newCube("Cube 1",createMaterial([0.8,0.8,0.8]),-1,0,-1,1,2,1);
 State.nodes.push(initNode); selectNode(initNode.id); renderAssets(); initializeAnimation(); loop();
 
-function openRenderPopup() {
+async function openRenderPopup() {
   const modal = document.getElementById('render-modal');
   modal.style.display = 'flex';
   
@@ -1592,6 +1600,21 @@ function openRenderPopup() {
 
   document.getElementById('render-stats').innerText = 'Status: Ready';
   document.getElementById('spp').innerText = "0";
+
+  renderer = new Renderer(canvas);
+  await renderer.init();
+  renderer.initPreview();
+
+  const scene = State.scene;
+  updateScene(scene);
+  await renderer.setScene(scene);
+
+  const sppElement = document.getElementById('spp');
+  renderActive = async function() {
+    await renderer.renderPreview(128);
+    sppElement.innerText = renderer.frame;
+  }
+  renderActive.preview = true;
 }
 
 var renderer;
@@ -1661,7 +1684,12 @@ function updateScene(scene) {
   var col = State.backgroundColor;
   var mul = State.backgroundIntensity;
   if (!State.background) scene.background = new HDRTexture([mul*col[0],mul*col[1],mul*col[2],1]);
-  else scene.background = State.background;
+  else {
+    scene.background = State.background;
+    //scene.background.exposure = State.backgroundIntensity;
+    scene.background.updateData();
+  }
+
   scene.bounces = Number(document.getElementById('render-bounces').value);
 
   scene.camera.position = Cam.position;
@@ -1674,10 +1702,12 @@ function updateScene(scene) {
 }
 var sceneLoaded = false;
 function startClicked() {
-  if (renderActive && sceneLoaded) {
+  if (renderActive && sceneLoaded && !renderActive.preview) {
     SaveRender('render-'+renderer.frame);
     return;
   }
+  renderActive = null;
+
   var type = Number(prompt("Enter type:\nPhoto = 0, Animation = 1, Simulation = 2")||0);
   if (type == 1) {
     var fps = Number(prompt("Enter framerate:","24")||24);
@@ -1698,6 +1728,10 @@ function startClicked() {
   }
 }
 async function startRender() {
+  const tsize = Number(prompt("Enter tile size:","256")||256);
+  const reps = Number(prompt("Enter reps:","4")||4);
+  const tilesVisible = Number(confirm("Watch tiles?:"));
+
   const canvas = document.getElementById('gpuCanvas');
   const status = document.getElementById('render-stats');
   sceneLoaded = false;
@@ -1716,7 +1750,7 @@ async function startRender() {
 
   const sppElement = document.getElementById('spp');
   renderActive = async function() {
-    await renderer.render();
+    await renderer.render(tsize,reps,tilesVisible);
     sppElement.innerText = renderer.frame;
   }
 
@@ -1887,7 +1921,7 @@ function closeRenderPopup() {
 
 // Logic to resize canvas when user changes inputs
 document.getElementById('render-w').onchange = (e) => {
-  //if (renderActive) return;
+  //if (!renderActive.preview) return;
   const canvas = document.getElementById('gpuCanvas');
   canvas.width = e.target.value;
   var cam = State.scene.camera;
@@ -1896,7 +1930,7 @@ document.getElementById('render-w').onchange = (e) => {
   if (renderer) renderer.resize();
 };
 document.getElementById('render-h').onchange = (e) => {
-  //if (renderActive) return;
+  //if (!renderActive.preview) return;
   const canvas = document.getElementById('gpuCanvas');
   canvas.height = e.target.value;
   var cam = State.scene.camera;
