@@ -1598,12 +1598,13 @@ async function openRenderPopup() {
   cam.updateRays();
   if (renderer) renderer.clear();
 
+  updateProgressBar(0);
   document.getElementById('render-stats').innerText = 'Status: Ready';
   document.getElementById('spp').innerText = "0";
 
   renderer = new Renderer(canvas);
   await renderer.init();
-  renderer.initPreview();
+  renderer.initPreview(100);
 
   const scene = State.scene;
   updateScene(scene);
@@ -1611,7 +1612,7 @@ async function openRenderPopup() {
 
   const sppElement = document.getElementById('spp');
   renderActive = async function() {
-    await renderer.renderPreview(128);
+    await renderer.renderPreview();
     sppElement.innerText = renderer.frame;
   }
   renderActive.preview = true;
@@ -1727,10 +1728,45 @@ function startClicked() {
     startRender();
   }
 }
+function updateProgressBar(value,renderStartTime) {
+  const percent = Math.min(Math.max(value, 0), 1);
+  const fill = document.getElementById('render-progress');
+  const stats = document.getElementById('render-stats');
+
+  // 1. Calculate Estimate
+  let timeText = "";
+  if (percent > 0.001 && percent < 1) {
+    const now = performance.now();
+    const elapsed = (now - renderStartTime) / 1000; // seconds
+    const totalEstimated = elapsed / percent;
+    const remaining = Math.round(totalEstimated - elapsed);
+    
+    timeText = ` — Est. ${remaining}s remaining`;
+  }
+
+  // 2. Update UI
+  if (fill) {
+    fill.style.width = `${percent * 100}%`;
+    fill.style.background = `hsl(${percent * 120}, 80%, 50%)`;
+  }
+
+  if (stats) {
+    if (percent <= 0) {
+      stats.innerText = "Status: Initializing...";
+    } else if (percent >= 1) {
+      stats.innerText = "Status: Complete";
+    } else {
+      const pLabel = Math.floor(percent * 100);
+      stats.innerText = `Status: Rendering (${pLabel}%)${timeText}`;
+    }
+  }
+}
 async function startRender() {
-  const tsize = Number(prompt("Enter tile size:","256")||256);
   const reps = Number(prompt("Enter reps:","4")||4);
+  var tsize = ((renderer?.currentPreviewSize/reps || 256) + 15) & ~15;
+  tsize = Number(prompt("Enter tile size:",tsize)||tsize);
   const tilesVisible = Number(confirm("Watch tiles?:"));
+  const spp = Number(prompt("Samples per pixel:","1024")||1024);
 
   const canvas = document.getElementById('gpuCanvas');
   const status = document.getElementById('render-stats');
@@ -1749,9 +1785,16 @@ async function startRender() {
   status.innerText = 'Status: Rendering...';
 
   const sppElement = document.getElementById('spp');
+  var saved = false;
+  var renderStartTime = performance.now();
   renderActive = async function() {
     await renderer.render(tsize,reps,tilesVisible);
     sppElement.innerText = renderer.frame;
+    updateProgressBar(renderer.frame/spp,renderStartTime);
+    if (renderer.frame > spp && !saved) {
+      SaveRender("render-"+spp);
+      saved = true;
+    }
   }
 
   document.getElementById('btn-start-render').textContent = "SAVE RENDER";
@@ -1825,6 +1868,10 @@ async function RecordVideo(animate,fps,samples,duration,callback) {
   sceneLoaded = false;
   status.innerText = 'Status: Loading Scene...';
 
+  var tsize = ((renderer?.currentPreviewSize || 256) + 15) & ~15;
+  tsize = Number(prompt("Enter tile size:",tsize)||tsize);
+  const tilesVisible = Number(confirm("Watch tiles?:"));
+
   //if (!renderer) {
     renderer = new Renderer(canvas);
     await renderer.init();
@@ -1845,6 +1892,8 @@ async function RecordVideo(animate,fps,samples,duration,callback) {
 
   if (typeof animate !== 'function') animate = ()=>{};
 
+  var videoStartTime = performance.now();
+
   var frames = Math.ceil(fps*duration);
   const sppElement = document.getElementById('spp');
   var counter = 0;
@@ -1859,7 +1908,8 @@ async function RecordVideo(animate,fps,samples,duration,callback) {
       encoder.add(data);
       renderer.reset();
     }
-    await renderer.render();
+    await renderer.render(tsize,1,tilesVisible);
+    updateProgressBar(counter / (samples * frames), videoStartTime);
     sppElement.innerText = renderer.frame + " / " + samples;
     if (counter >= samples*frames || encoder._saveEarly) {
       console.log("Starting Compile");

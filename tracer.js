@@ -2283,11 +2283,11 @@ class Renderer {
     pass.end();
   }
 
-  initPreview() {
+  initPreview(targetTime) {
     const { device } = this;
     const canvasFormat = 'rgba8unorm'; 
 
-    this.targetFrameTime = 1000/5; // 16.6ms for 60 FPS
+    this.targetFrameTime = targetTime || 1000 / 60; // 16.6ms for 60 FPS
     this.currentPreviewSize = 128;    // Start size
     this.lastFrameTime = performance.now();
     
