@@ -632,10 +632,62 @@ var SceneList = [
       scene.newSphere("T7",lightMat,9.46,2,3.53,0.2).enableNEE = true;
       scene.newSphere("T8",lightMat,-9.11,2,3.53,0.2).enableNEE = true;
 
+      const file = await fetchToFile('assets/sponza_zip.zip', 'sponza.zip');
+      await handleUpload({ files: [file] });
+
       // const { models } = await loader.load('assets/material_ball.glb');
       // models[0].bakeTransform(mat4.fromRotation(mat4.create(), -Math.PI / 2, [1, 0, 0]));
       // models[0].renormalize(true);
       // models[0].generateBVH();
+
+
+      var bunnyModel = new ModelData().loadOBJ('assets/bunny/model.obj');
+      var dragonModel = new ModelData().loadOBJ('assets/dragon-2.obj');
+      
+      //scene.background = new HDRTexture([0.8,0.85,1,1]);
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/studio_small_09_2k.hdr');
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/venice_sunset_2k.hdr');
+      //scene.background = new HDRTexture('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/abandoned_greenhouse_2k.hdr');
+      //scene.background = new HDRTexture('assets/cape_hill_4k.hdr');
+
+      await Promise.all([
+        bunnyModel.loaded,
+        dragonModel.loaded,
+        //scene.background.loaded
+      ]);
+      bunnyModel.renormalize();
+      bunnyModel.generateBVH();
+      // const rot = mat4.create();
+      // mat4.fromXRotation(rot, -Math.PI / 2);
+      // dragonModel.bakeTransform(rot);
+      dragonModel.renormalize(true);
+      dragonModel.calculateSmoothNormals();
+      dragonModel.generateBVH();
+      //
+
+      var matWhite = new Material("White",[0.8, 0.8, 0.8], 1.0);
+      var matRed = new Material("Red",[0.8, 0.2, 0.2], 1.0);
+      var matGreen = new Material("Green",[0.2, 0.8, 0.2], 1.0);
+      var matCeramic = new Material("Ceramic",[0.9, 0.9, 0.9], 0.0);
+      var matMetal = new Material("Mirror",[0.8, 0.9, 0.8], 0.0, {metallic:1});
+      var matLight = new Material("Light",[0.0, 0.0, 0.0], 1.0, {emissionIntensity: 15});
+
+      var matGlass = new Material("Glass",[1.0, 1.0, 1.0], 0.0, {transmission: 1.0});
+      var matBlueGlass = new Material("Blue Frosted Glass",[0.2, 0.2, 1.0], 1.0, {transmission: 1.0});
+      var matRedGlass = new Material("Red Glass",[1.0, 0.2, 0.2], 0.0, {transmission: 1.0});
+      
+      scene.newPlane("Floor",matCeramic, 0, 1, 0, 0);    // Floor (POM Textured)
+
+      //scene.newSphere("Blue Ball",matBlueGlass, -1.6, 0.5, -1.4, 0.5);
+      //scene.newSphere("Glass Ball",matGlass, 0, 0, 0, 2);
+
+      var model = scene.newModel("Dragon",matBlueGlass,dragonModel);
+      quat.rotateY(model.rotation, model.rotation, -20 * Math.PI / 180);
+      model.scaleMult(1.5,1.5,1.5);
+      var model2 = scene.newModel("Bunny",matCeramic,bunnyModel);
+      model2.scaleMult(0.5,0.5,0.5);
+      model2.translate(-1,0.5,1);
+
       
       // scene.objects = scene.objects.concat(models);
       scene.bounces = 4;

@@ -1271,10 +1271,24 @@ window.createMaterial = (color) => {
   return mat;
 };
 
+window.fetchToFile = async function(url, fileName) {
+  // 1. Fetch the data from the URL
+  const response = await fetch(url);
+  
+  // 2. Convert the response into a Blob (Binary Large Object)
+  const blob = await response.blob();
+  
+  // 3. Get the content type from the headers (e.g., 'image/jpeg', 'application/pdf')
+  const contentType = response.headers.get('content-type');
+  
+  // 4. Create and return the File object
+  return new File([blob], fileName, { type: contentType });
+}
+
 window.handleUpload = (input) => {
   const files = Array.from(input.files);
 
-  files.forEach(async (file) => {
+  return Promise.all(files.map(async (file) => {
     const name = file.name.toLowerCase();
     const isOBJ = name.endsWith('.obj');
     const isImage = /\.(jpe?g|png|webp)$/i.test(name);
@@ -1359,12 +1373,12 @@ window.handleUpload = (input) => {
           const jsonText = await mainModelEntry.async("string");
           result = await loader.loadFromAssets(JSON.parse(jsonText), assetMap, basePath);
         }
-        
+              
         addGltfResultToState(result);
       } catch (err) {
         console.error("Failed to load ZIP:", err);
       }
-      return;
+      return result;
     }
 
     // Handle standard OBJ
@@ -1400,7 +1414,7 @@ window.handleUpload = (input) => {
       };
       reader.readAsDataURL(file);
     }
-  });
+  }));
 };
 window.exportCurrentScene = async () => {
   if (!State || !State.scene || !State.scene.objects) return;
