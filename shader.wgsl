@@ -14,7 +14,8 @@
 const PI: f32 = 3.14159265359;
 const TWO_PI: f32 = 6.28318530718;
 const INFINITY: f32 = 65504.0;
-const STACK_SIZE: u32 = 64;
+const TLAS_STACK_SIZE: u32 = #TLASSTACKSIZE#;
+const BLAS_STACK_SIZE: u32 = #BLASSTACKSIZE#;
 
 struct Ray {
   origin: vec3f,
@@ -477,7 +478,7 @@ fn trace_mesh(ray_world: Ray, mesh: MeshInstance, hit: ptr<function, SurfaceHit>
   ray_local.direction = (mesh.inv_matrix * vec4f(ray_world.direction, 0.0)).xyz;
   
   let inv_dir = 1.0 / ray_local.direction;
-  var stack: array<u32, STACK_SIZE>; 
+  var stack: array<u32, BLAS_STACK_SIZE>; 
   var stack_ptr: i32 = 0;
   
   stack[0] = mesh.node_offset; // Start at root node for this mesh
@@ -694,7 +695,7 @@ fn trace_torus(ray: Ray, tor: Torus, hit: ptr<function, SurfaceHit>, idx: i32) {
 fn trace_tlas(ray: Ray, hit: ptr<function, SurfaceHit>) {
   let inv_dir = 1.0 / ray.direction;
 
-  var stack: array<u32, STACK_SIZE>; 
+  var stack: array<u32, TLAS_STACK_SIZE>; 
   var stack_ptr: i32 = 0;
   
   stack[0] = 0;
@@ -816,7 +817,7 @@ fn trace_mesh_shadow(ray_world: Ray, mesh: MeshInstance, target_dist: f32, shado
   ray_local.direction = (mesh.inv_matrix * vec4f(ray_world.direction, 0.0)).xyz;
   let inv_dir = 1.0 / ray_local.direction;
 
-  var stack: array<u32, STACK_SIZE>;
+  var stack: array<u32, BLAS_STACK_SIZE>;
   var stack_ptr: i32 = 0;
   stack[0] = mesh.node_offset;
   stack_ptr++;
@@ -1133,7 +1134,7 @@ fn trace_torus_shadow(ray_world: Ray, tor: Torus, target_dist: f32, shadow: ptr<
 
 fn trace_tlas_shadow(ray: Ray, target_idx: i32, target_dist: f32, shadow: ptr<function, vec3f>) -> bool {
   let inv_dir = 1.0 / ray.direction;
-  var stack: array<u32, STACK_SIZE>;
+  var stack: array<u32, TLAS_STACK_SIZE>;
   var stack_ptr: i32 = 0;
   stack[stack_ptr] = 0u;
   stack_ptr++;

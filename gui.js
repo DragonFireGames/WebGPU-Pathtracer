@@ -1708,6 +1708,9 @@ function updateScene(scene) {
   }
 
   scene.bounces = Number(document.getElementById('render-bounces').value);
+  scene.textureSize = Number(document.getElementById('render-texsize').value);
+  scene.tlasStackSize = Number(document.getElementById('render-tlasstack').value);
+  scene.blasStackSize = Number(document.getElementById('render-blasstack').value);
 
   scene.camera.position = Cam.position;
   scene.camera.target = Cam.target;

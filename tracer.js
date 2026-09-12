@@ -1623,6 +1623,9 @@ class Scene {
     this.objects = [];
     this.camera = new Camera(canvas);
     this.bounces = 8;
+    this.textureSize = 512;
+    this.tlasStackSize = 64;
+    this.blasStackSize = 64;
     this.background = null;
   }
   newSphere() { var o = new Sphere(...arguments); this.objects.push(o); return o; }
@@ -1918,7 +1921,7 @@ class Renderer {
 
   async prepareTextureArray(scene) {
     const textures = scene.getTextures();
-    const size = 512; // Choose your highest common resolution
+    const size = scene.textureSize; // Choose your highest common resolution
 
     // 1. Create the 'Stack'
     const texArray = this.device.createTexture({
@@ -2039,7 +2042,10 @@ class Renderer {
     
     console.log("Created Buffers");
 
-    const wgslCode = await loadText('shader.wgsl');
+    let wgslCode = await loadText('shader.wgsl');
+
+    wgslCode = wgslCode.replace('#TLASSTACKSIZE#',scene.tlasStackSize);
+    wgslCode = wgslCode.replace('#BLASSTACKSIZE#',scene.blasStackSize);
 
     console.log("Code Loaded");
 

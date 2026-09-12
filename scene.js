@@ -673,7 +673,8 @@ var SceneList = [
       var matLight = new Material("Light",[0.0, 0.0, 0.0], 1.0, {emissionIntensity: 15});
 
       var matGlass = new Material("Glass",[1.0, 1.0, 1.0], 0.0, {transmission: 1.0});
-      var matBlueGlass = new Material("Blue Frosted Glass",[0.2, 0.2, 1.0], 1.0, {transmission: 1.0});
+      //var matBlueGlass = new Material("Blue Frosted Glass",[0.2, 0.2, 1.0], 1.0, {transmission: 1.0});
+      var matBlueGlass = new Material("Blue Glass",[0, 0.2, 1.0], 0.0, {transmission: 1.0});
       var matRedGlass = new Material("Red Glass",[1.0, 0.2, 0.2], 0.0, {transmission: 1.0});
       
       scene.newPlane("Floor",matCeramic, 0, 1, 0, 0);    // Floor (POM Textured)
@@ -684,9 +685,12 @@ var SceneList = [
       var model = scene.newModel("Dragon",matBlueGlass,dragonModel);
       quat.rotateY(model.rotation, model.rotation, -20 * Math.PI / 180);
       model.scaleMult(1.5,1.5,1.5);
+      model.translate(3.25,1,0);
+      quat.rotateY(model.rotation, model.rotation, 90 * Math.PI / 180);
       var model2 = scene.newModel("Bunny",matCeramic,bunnyModel);
       model2.scaleMult(0.5,0.5,0.5);
-      model2.translate(-1,0.5,1);
+      model2.translate(4.2,1.5,-0.8);
+      quat.rotateY(model2.rotation, model2.rotation, 90 * Math.PI / 180);
 
       
       // scene.objects = scene.objects.concat(models);

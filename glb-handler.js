@@ -92,7 +92,7 @@ class GLTFLoader {
         else if (type === "Torus") modelInstance = new Torus(name, mat, 1, node.extras.inner_radius);
 
         if (modelInstance) {
-          modelInstance.enableNEE = !!node.extras.enableNEE;
+          modelInstance.enableNEE = !!node.extras.enable_nee;
           const finalWorld = worldMatrices[nodeIdx];
           if (mat4.invert(modelInstance.invMatrix, finalWorld)) {
             if (!modelInstance.position) modelInstance.position = vec3.create();
@@ -786,7 +786,7 @@ class GLTFExporter {
         // It's a Primitive! Add custom flags so our loader knows what it really is
         node.extras = { ptracer_primitive: objType, enable_nee: obj.enableNEE };
         if (objType == "Cylinder" && obj.top_radius !== undefined) node.extras.top_radius = obj.top_radius;
-        if (objType == "Frustum" && obj.inner_radius !== undefined) node.extras.inner_radius = obj.inner_radius;
+        if (objType == "Torus" && obj.inner_radius !== undefined) node.extras.inner_radius = obj.inner_radius;
         
         // Export physical representation if available
         if (typeof obj.generateMesh === 'function') {
