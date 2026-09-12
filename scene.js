@@ -633,7 +633,7 @@ var SceneList = [
       scene.newSphere("T8",lightMat,-9.11,2,3.53,0.2).enableNEE = true;
 
       const file = await fetchToFile('assets/sponza_zip.zip', 'sponza.zip');
-      await handleUpload({ files: [file] });
+      handleUpload({ files: [file] });
 
       // const { models } = await loader.load('assets/material_ball.glb');
       // models[0].bakeTransform(mat4.fromRotation(mat4.create(), -Math.PI / 2, [1, 0, 0]));
