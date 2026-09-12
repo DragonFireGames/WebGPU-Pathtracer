@@ -688,9 +688,19 @@ class GLTFLoader {
     var name = gltfMat.name || "GLB_Mat";
 
     if (pbr.baseColorTexture) options.albedoTex = this.extractTexture(pbr.baseColorTexture.index, json, bin, name+"_baseColor");
-    if (gltfMat.normalTexture) options.normalTex = this.extractTexture(gltfMat.normalTexture.index, json, bin, name+"_normal");
+    if (gltfMat.normalTexture) {
+      options.normalTex = this.extractTexture(gltfMat.normalTexture.index, json, bin, name+"_normal");
+      options.normalMultiplier = gltfMat.normalTexture.multiplier;
+    }
     if (pbr.metallicRoughnessTexture) options.roughnessTex = options.metallicTex = this.extractTexture(pbr.metallicRoughnessTexture.index, json, bin, name+"_metallicRoughness");
     if (gltfMat.emissiveTexture) options.emissiveTex = this.extractTexture(gltfMat.emissiveTexture.index, json, bin, name+"_emissive");
+    if (gltfMat.heightTexture) {
+      options.heightTex = this.extractTexture(gltfMat.heightTexture.index, json, bin, name+"_height");
+      options.heightMultiplier = gltfMat.heightTexture.multiplier;
+      options.heightSamp = gltfMat.heightTexture.sample_count;
+      options.heightOffset = gltfMat.heightTexture.offset;
+    }
+    options.uvScale = gltfMat.uvScale;
 
     return new Material(name, baseColor, options.roughness, options);
   }
@@ -1000,13 +1010,15 @@ class GLTFExporter {
     };
 
     if (mat.emittance && (mat.emittance[0] > 0 || mat.emittance[1] > 0 || mat.emittance[2] > 0)) {
-        gltfMat.emissiveFactor = mat.emittance;
+      gltfMat.emissiveFactor = mat.emittance;
     }
 
     if (mat.albedoTex) gltfMat.pbrMetallicRoughness.baseColorTexture = { index: await this.processTexture(mat.albedoTex) };
-    if (mat.normalTex) gltfMat.normalTexture = { index: await this.processTexture(mat.normalTex) };
+    if (mat.normalTex) gltfMat.normalTexture = { index: await this.processTexture(mat.normalTex), multiplier: mat.normalMultiplier };
     if (mat.metallicTex) gltfMat.pbrMetallicRoughness.metallicRoughnessTexture = { index: await this.processTexture(mat.metallicTex) };
     if (mat.emissiveTex) gltfMat.emissiveTexture = { index: await this.processTexture(mat.emissiveTex) };
+    if (mat.heightTex) gltfMat.heightTexture = { multiplier: mat.heightMultiplier, sample_count: mat.heightSamp, offset: mat.heightOffset };
+    gltfMat.uvScale = mat.uvScale;
 
     if (mat.ior && mat.ior !== 1.5) {
       this.addExtension("KHR_materials_ior");
