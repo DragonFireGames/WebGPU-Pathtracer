@@ -1,0 +1,11 @@
+{
+  "url": "",
+  "usePeerServer": false,
+  "branch": "main",
+  "commit": "",
+  "peerLayer": "GNYmDZ",
+  "repo": {
+    "owner": "DragonFireGames",
+    "name": "WebGPU-Pathtracer"
+  }
+}
