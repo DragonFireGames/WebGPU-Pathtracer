@@ -1,8 +1,12 @@
 {
-  "url": "",
+  "mode": "editor",
+  "url": "/",
   "usePeerServer": false,
   "branch": "main",
   "commit": "",
+  "externalUrl": "",
+  "externalMode": "iframe",
+  "hookUrl": "",
   "peerLayer": "GNYmDZ",
   "repo": {
     "owner": "DragonFireGames",
