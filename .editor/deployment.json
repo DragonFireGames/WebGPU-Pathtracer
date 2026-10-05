@@ -1,13 +1,9 @@
 {
-  "mode": "editor",
-  "url": "/",
-  "usePeerServer": false,
-  "branch": "main",
-  "commit": "",
+  "thirdParty": false,
   "externalUrl": "",
-  "externalMode": "iframe",
-  "hookUrl": "",
-  "peerLayer": "GNYmDZ",
+  "branch": "main",
+  "commit": "latest",
+  "path": "/",
   "repo": {
     "owner": "DragonFireGames",
     "name": "WebGPU-Pathtracer"
